@@ -1,0 +1,1554 @@
+/* Page-level composition. Ordered by user journey: upload → processing →
+ * results → history → dashboard → auth → settings → method. */
+
+/* ============================================================ HOME / UPLOAD */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding-block: var(--space-md) var(--space-sm);
+}
+
+.hero__title {
+  font-size: var(--step-5);
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  max-width: 20ch;
+}
+
+/* Keep the accent on one span so it survives line-wrapping at any viewport
+ * width — a per-word treatment would break at 320px. */
+.hero__accent {
+  color: var(--brand);
+}
+
+.hero__lede {
+  max-width: 52ch;
+  font-size: var(--step-1);
+  color: var(--text-muted);
+  line-height: var(--leading-snug);
+}
+
+/* ---- Dropzone ---- */
+
+.dropzone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2xs);
+  min-height: clamp(200px, 34vh, 320px);
+  padding: var(--space-md) var(--space-sm);
+  text-align: center;
+  background: var(--surface-1);
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease-out), background var(--dur) var(--ease-out),
+    transform var(--dur) var(--ease-out);
+}
+
+.dropzone:hover {
+  border-color: var(--brand-line);
+  transform: translateY(-2px);
+}
+
+.dropzone:focus-visible {
+  border-color: var(--brand);
+  box-shadow: var(--ring);
+}
+
+/* Drag-over is a solid border, not just a tint: the tint alone is easy to miss
+ * while a file is under the cursor obscuring part of the target. */
+.dropzone.is-over {
+  border-style: solid;
+  border-color: var(--brand);
+  background: var(--surface-2);
+}
+
+.dropzone.is-over .dropzone__icon {
+  transform: scale(1.1) translateY(-3px);
+}
+
+.dropzone__icon {
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  border-radius: var(--radius-lg);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  transition: transform var(--dur) var(--ease-spring);
+}
+
+.dropzone__icon svg {
+  width: 27px;
+  height: 27px;
+}
+
+.dropzone__title {
+  font-size: var(--step-1);
+  font-weight: 660;
+}
+
+.dropzone__hint {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  max-width: 34ch;
+}
+
+.dropzone__actions {
+  display: flex;
+  gap: var(--space-2xs);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--space-3xs);
+}
+
+.dropzone input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- Sample strip ---- */
+
+.samples {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 45%), 1fr));
+  gap: var(--space-2xs);
+}
+
+.sample {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out);
+}
+
+.sample:hover {
+  transform: translateY(-2px);
+  border-color: var(--brand-line);
+}
+
+.sample img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.sample:hover img {
+  transform: scale(1.06);
+}
+
+.sample__label {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 1.6rem 0.6rem 0.5rem;
+  background: rgb(0 0 0 / 0.64);
+  color: #fff;
+  font-size: var(--step--2);
+  font-weight: 640;
+  text-align: left;
+}
+
+/* ---- Preview + plate size ---- */
+
+.preview {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+/* Capped in rem as well as dvh: on a tall desktop window 60dvh alone pushed the
+ * "Analyse this meal" button and the plate-width slider below the fold, so the
+ * one screen where a user has to act looked like it had nothing to act on. */
+.preview img {
+  width: 100%;
+  max-height: min(60dvh, 24rem);
+  object-fit: contain;
+}
+
+.preview__clear {
+  position: absolute;
+  top: var(--space-2xs);
+  right: var(--space-2xs);
+  background: rgb(0 0 0 / 0.55);
+  border-color: transparent;
+  color: #fff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ---- How-it-works strip ---- */
+
+.steps {
+  display: grid;
+  gap: var(--space-sm);
+  counter-reset: step;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+}
+
+.step {
+  position: relative;
+  padding: var(--space-sm);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: var(--space-2xs);
+  border-radius: var(--radius-xs);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  font-size: var(--step--1);
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+}
+
+.step__title {
+  font-weight: 660;
+  margin-bottom: 2px;
+}
+
+.step__text {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  line-height: var(--leading-snug);
+}
+
+.step__model {
+  display: inline-block;
+  margin-top: var(--space-2xs);
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  color: var(--text-faint);
+}
+
+/* ============================================================== PROCESSING */
+
+.processing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding-block: var(--space-md);
+}
+
+.scanframe {
+  position: relative;
+  width: min(100%, 460px);
+  aspect-ratio: 1;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-lg);
+}
+
+.scanframe img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.82) brightness(0.76);
+}
+
+.scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 88px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgb(var(--brand-rgb) / 0.16) 45%,
+    rgb(var(--brand-rgb) / 0.6) 50%,
+    rgb(var(--brand-rgb) / 0.16) 55%,
+    transparent
+  );
+  animation: scan 2.1s var(--ease-in-out) infinite;
+  pointer-events: none;
+}
+
+/* Corner brackets — a viewfinder read, drawn with two pseudo-elements on the
+ * frame plus two on an inner span (see markup). */
+.scanframe__corners::before,
+.scanframe__corners::after {
+  content: "";
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border: 2.5px solid var(--brand);
+  pointer-events: none;
+}
+
+.scanframe__corners::before {
+  top: 14px;
+  left: 14px;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: var(--radius-xs) 0 0 0;
+}
+
+.scanframe__corners::after {
+  bottom: 14px;
+  right: 14px;
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 var(--radius-xs) 0;
+}
+
+.stagelist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(100%, 460px);
+}
+
+.stage {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.62rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--step--1);
+  color: var(--text-faint);
+  transition: background var(--dur) var(--ease-out), color var(--dur) var(--ease-out);
+}
+
+.stage__mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  font-size: var(--step--2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stage__mark svg {
+  width: 13px;
+  height: 13px;
+}
+
+.stage__label {
+  font-weight: 600;
+}
+
+.stage__meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--step--2);
+  color: var(--text-faint);
+}
+
+.stage.is-active {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.stage.is-active .stage__mark {
+  border-color: var(--brand);
+  border-top-color: transparent;
+  animation: spin 800ms linear infinite;
+}
+
+.stage.is-done {
+  color: var(--text-muted);
+}
+
+.stage.is-done .stage__mark {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+
+/* ================================================================== REVIEW */
+
+/* The step between "what is on the plate" and "what it cost". Structurally a
+ * sibling of the results page — same photo-beside-list `.split` — but the list
+ * rows are controls rather than disclosures, so they get their own element
+ * instead of borrowing `.item` and fighting its cursor, hover and open states. */
+
+.review__head {
+  padding-block: var(--space-2xs) 0;
+}
+
+.review__title {
+  max-width: 26ch;
+  font-size: var(--step-3);
+  text-wrap: balance;
+}
+
+.review__visual,
+.review__list {
+  min-width: 0;
+}
+
+@media (min-width: 62rem) {
+  /* Wider photo share than the results page: the whole job here is judging
+   * whether a region is food, and that is done by eye. */
+  .review__layout {
+    grid-template-columns: minmax(0, 1.15fr) minmax(23rem, 0.85fr);
+  }
+
+  .review__visual .plate,
+  .review__visual .plate img {
+    max-height: calc(100dvh - var(--topbar-h) - 7rem);
+  }
+
+  .review__visual .plate img {
+    object-fit: contain;
+  }
+}
+
+.review__actions {
+  padding-top: var(--space-2xs);
+  border-top: 1px solid var(--line);
+}
+
+/* ---- Editable rows ---- */
+
+.revlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+/* `auto 1fr auto` like `.item`, but the trailing column holds a counter and two
+ * buttons rather than a calorie figure, so it is allowed to be wide. */
+.rev {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  transition: border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+}
+
+.rev:hover,
+.rev.is-active {
+  border-color: var(--brand-line);
+  background: var(--surface-2);
+}
+
+.rev.is-active {
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+/* A row the classifier was unsure about is the most likely thing on this screen
+ * to be deleted, so it is tinted to draw the eye — not to accuse it of being
+ * wrong, but to say "look at this one". */
+.rev--low {
+  border-color: rgb(var(--warn-rgb) / 0.3);
+  background: rgb(var(--warn-rgb) / 0.04);
+}
+
+.rev--added {
+  border-color: var(--brand-line);
+  background: rgb(var(--brand-rgb) / 0.05);
+}
+
+/* Removed rows stay in place, dimmed, because the undo has to be where the row
+ * was. Collapsing them would make the list jump under the cursor mid-decision. */
+.rev--removed {
+  opacity: 0.55;
+  background: transparent;
+  border-style: dashed;
+}
+
+.rev--removed:hover {
+  opacity: 0.8;
+  background: transparent;
+}
+
+.rev--removed .rev__name > .truncate {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--text-faint);
+}
+
+.rev__mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-xs);
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.rev.is-active .rev__mark {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+.rev__mark--out {
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--text-faint);
+}
+
+.rev__mark--new {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.rev__body {
+  min-width: 0;
+}
+
+.rev__name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  row-gap: 0.2rem;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+  min-width: 0;
+}
+
+.rev__note {
+  margin-top: 0.15rem;
+  font-size: var(--step--2);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.rev__side {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex: none;
+}
+
+/* The destructive control is quiet until hovered. It is one click from deleting
+ * a row, and the row is the only copy of that decision. */
+.rev__drop {
+  color: var(--text-faint);
+}
+
+.rev__drop:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* ---- Piece counter ---- */
+
+/* One control, three parts: minus, a real number input, plus. The input is real
+ * so a phone shows a numeric keypad and 14 pieces takes two keystrokes rather
+ * than fourteen taps. */
+.counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+
+.counter__btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.counter__btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.counter__btn:active {
+  transform: scale(0.94);
+}
+
+.counter__input {
+  width: 2.6rem;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--step--1);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* The spinners duplicate the ± buttons at a quarter of the tap target. */
+.counter__input::-webkit-outer-spin-button,
+.counter__input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.counter__input:focus {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
+}
+
+.counter__unit {
+  padding-inline: 0.35rem 0.5rem;
+  font-size: var(--step--2);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Below ~44rem the counter and both buttons stop fitting beside the name, so the
+ * controls drop to their own line and span the row. */
+@media (max-width: 44rem) {
+  .rev {
+    grid-template-columns: 28px minmax(0, 1fr);
+    row-gap: var(--space-2xs);
+  }
+
+  .rev__side {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .rev__side > .counter {
+    margin-right: auto;
+  }
+}
+
+@media (max-width: 30rem) {
+  .review-page {
+    padding-top: var(--space-sm);
+  }
+
+  .counter__unit {
+    padding-inline: 0.3rem 0.4rem;
+  }
+
+  .review__actions {
+    align-items: stretch;
+  }
+
+  .review__actions > .btn {
+    flex: 1 1 100%;
+  }
+
+  .review__actions > .grow {
+    display: none;
+  }
+}
+
+/* ================================================================= RESULTS */
+
+/* ---- Annotated photo ---- */
+
+.plate {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  line-height: 0;
+  box-shadow: var(--shadow-md);
+}
+
+.plate img {
+  width: 100%;
+  height: auto;
+}
+
+/* The overlay is an SVG in the image's own pixel coordinate system via
+ * viewBox, so bbox fractions map exactly regardless of rendered size — no
+ * resize listener, no layout thrash. */
+.plate__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bbox {
+  fill: rgb(var(--brand-rgb) / 0.07);
+  stroke: var(--brand);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+  transition: fill var(--dur-fast) var(--ease-out), stroke-width var(--dur-fast) var(--ease-out);
+}
+
+/* The label sits above the rect, so hovering it has to count as hovering the
+ * box — otherwise the one part with words on it is the one part that does
+ * nothing. The group is the only element that covers both. */
+.bbox:hover,
+.bbox-group:hover .bbox,
+.bbox.is-active {
+  fill: rgb(var(--brand-rgb) / 0.2);
+  stroke-width: 3.5;
+}
+
+.bbox--low {
+  stroke: var(--warn);
+  stroke-dasharray: 7 5;
+  fill: rgb(var(--warn-rgb) / 0.07);
+}
+
+.bbox--low:hover,
+.bbox-group:hover .bbox--low,
+.bbox--low.is-active {
+  fill: rgb(var(--warn-rgb) / 0.2);
+  animation: dash-march 700ms linear infinite;
+}
+
+.bbox-label {
+  fill: var(--brand-ink);
+  font-size: 13px;
+  font-weight: 700;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+.bbox-label__bg {
+  fill: var(--brand);
+  pointer-events: none;
+}
+
+.bbox-label__bg--low {
+  fill: var(--warn);
+}
+
+/* ---- Totals header ---- */
+
+.totals {
+  display: grid;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.totals__ring {
+  display: grid;
+  place-items: center;
+}
+
+/* One column until there is room for the ring and the list side by side. An
+ * `auto-fit` track fitted two 130px columns inside a 290px card at phone width,
+ * which left the ring spanning both and the list squeezed into one — narrow
+ * enough that "Protein" broke across two lines. */
+@media (min-width: 30rem) {
+  .totals {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
+.macrolist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.macrorow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: var(--step--1);
+}
+
+.macrorow__name {
+  font-weight: 600;
+}
+
+.macrorow__val {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.macrorow__val b {
+  color: var(--text);
+  font-weight: 680;
+}
+
+/* ---- Item list ---- */
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.item {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-xs);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.item--low {
+  border-color: rgb(var(--warn-rgb) / 0.28);
+}
+
+.item:hover,
+.item.is-active {
+  border-color: var(--brand-line);
+  background: var(--surface-2);
+}
+
+.item.is-active {
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.item__index {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-xs);
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: var(--step--2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.item.is-active .item__index {
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+.item__body {
+  min-width: 0;
+}
+
+.item__name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+  min-width: 0;
+}
+
+.item__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  font-size: var(--step--2);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.item__kcal {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.item__kcal b {
+  display: block;
+  font-size: var(--step-1);
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.item__kcal span {
+  font-size: var(--step--2);
+  color: var(--text-faint);
+}
+
+@media (max-width: 34rem) {
+  .item {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    padding-inline: var(--space-2xs);
+  }
+
+  .item__name {
+    flex-wrap: wrap;
+    row-gap: 0.2rem;
+  }
+
+  .item__meta {
+    display: block;
+  }
+
+  .item__meta > span {
+    margin-right: 0.35rem;
+  }
+}
+
+@media (max-width: 30rem) {
+  .panel > .row--between {
+    align-items: flex-start;
+  }
+
+  .panel > .row--between > .btn {
+    flex: 0 0 auto;
+  }
+
+  .panel > .row--between + p {
+    max-width: 58ch;
+  }
+}
+
+/* ---- Results composition ---------------------------------------------- */
+
+.results-page {
+  --results-gap: clamp(1rem, 1.5vw, 1.5rem);
+}
+
+.results__head {
+  padding-block: var(--space-2xs) 0;
+}
+
+.results__title {
+  max-width: 24ch;
+  font-size: var(--step-3);
+  text-wrap: balance;
+}
+
+.results__layout {
+  gap: var(--results-gap);
+}
+
+.results__visual,
+.results__details {
+  min-width: 0;
+}
+
+.results__totals {
+  border-top: 2px solid var(--brand);
+  box-shadow: var(--shadow-sm);
+}
+
+.results__totals .totals__ring {
+  padding-block: var(--space-2xs);
+}
+
+.results__details > .section {
+  gap: var(--space-xs);
+}
+
+.results__micros {
+  margin-top: var(--space-2xs);
+}
+
+.results__actions {
+  padding-top: var(--space-2xs);
+  border-top: 1px solid var(--line);
+}
+
+.results-page .panel--warn {
+  box-shadow: inset 0 0 0 1px rgb(var(--warn-rgb) / 0.08);
+}
+
+@media (min-width: 62rem) {
+  .results__layout {
+    grid-template-columns: minmax(0, 1.12fr) minmax(21rem, 0.88fr);
+  }
+
+  .results__visual .plate {
+    max-height: calc(100dvh - var(--topbar-h) - 8rem);
+  }
+
+  .results__visual .plate img {
+    max-height: calc(100dvh - var(--topbar-h) - 8rem);
+    object-fit: contain;
+  }
+}
+
+@media (max-width: 30rem) {
+  .results-page {
+    padding-top: var(--space-sm);
+  }
+
+  .results__head .row--between {
+    align-items: flex-start;
+  }
+
+  .results__head .row--between > :last-child {
+    width: 100%;
+  }
+
+  .results__head .row--between > :last-child .row {
+    justify-content: flex-start;
+  }
+
+  .results__actions {
+    align-items: stretch;
+  }
+
+  .results__actions > .btn,
+  .results__actions > a {
+    flex: 1 1 100%;
+  }
+
+  .results__actions > .grow {
+    display: none;
+  }
+
+  .results__actions > button:last-child {
+    flex: 1 1 100%;
+  }
+}
+
+/* Expanded detail. `grid-template-rows: 0fr → 1fr` animates height without a
+ * measured pixel value, so it works for any content length. */
+.item__detail {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur) var(--ease-out);
+}
+
+.item.is-open .item__detail {
+  grid-template-rows: 1fr;
+}
+
+.item__detail > div {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.item__detail-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding-top: var(--space-2xs);
+  margin-top: var(--space-2xs);
+  border-top: 1px solid var(--line);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 46%), 1fr));
+  gap: var(--space-2xs) var(--space-sm);
+  font-size: var(--step--2);
+}
+
+.kv__k {
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  font-weight: 680;
+  font-size: 0.9em;
+}
+
+.kv__v {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ---- Micronutrient grid ---- */
+
+.micros {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
+  gap: var(--space-2xs) var(--space-sm);
+}
+
+.micro {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-block: 0.3rem;
+}
+
+.micro__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: var(--step--1);
+}
+
+.micro__name {
+  font-weight: 600;
+}
+
+.micro__val {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: var(--step--2);
+  white-space: nowrap;
+}
+
+.micro__pct {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Correction sheet ---- */
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  width: 100%;
+  padding: 0.62rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.suggestion:hover {
+  border-color: var(--brand-line);
+  background: var(--surface-3);
+}
+
+.suggestion[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.suggestion__name {
+  font-weight: 620;
+  flex: 1;
+  min-width: 0;
+}
+
+.suggestion__conf {
+  font-size: var(--step--2);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ================================================================= HISTORY */
+
+.history {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--space-sm);
+}
+
+.mealcard {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.mealcard__media {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.mealcard__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.mealcard:hover .mealcard__media img {
+  transform: scale(1.05);
+}
+
+.mealcard__kcal {
+  position: absolute;
+  top: var(--space-2xs);
+  left: var(--space-2xs);
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+  font-size: var(--step--2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.mealcard__flag {
+  position: absolute;
+  top: var(--space-2xs);
+  right: var(--space-2xs);
+}
+
+/* `.chip--warn` is tuned for the app's own surface, where its 14% tint sits on a
+ * known background. Over a photo it composites against whatever pixels happen to
+ * be behind it — on a dark plate the amber-on-brown measured 2.4:1. Carry an
+ * opaque backing like the kcal badge does, so the flag reads on any image. */
+.mealcard__flag .chip {
+  background: rgb(0 0 0 / 0.62);
+  border-color: rgb(255 255 255 / 0.22);
+  color: #ffe0a3;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.mealcard__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  padding: var(--space-xs);
+}
+
+.mealcard__when {
+  font-size: var(--step--2);
+  color: var(--text-faint);
+  font-weight: 620;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.mealcard__items {
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.mealcard__foot {
+  margin-top: auto;
+  padding-top: var(--space-2xs);
+}
+
+/* =============================================================== DASHBOARD */
+
+.rings {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 45%), 1fr));
+  justify-items: center;
+}
+
+/* The donut's centre readout is decoration over the ring, not content to select.
+ * Without this, dragging to scroll a phone highlights the calorie number. */
+.donut__centre {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The track height and label height are declared as custom properties so the
+ * goal line can be positioned against the *bar area* alone, in CSS, without JS
+ * measuring anything. */
+.trend {
+  --track-h: 148px;
+  --label-h: calc(1.2rem + 5px);
+  --goal-gutter: 0px;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: clamp(2px, 0.6vw, 8px);
+  padding-right: var(--goal-gutter);
+}
+
+/* Room at the right end for the goal line's label, and only when there is one.
+ * The label used to sit on top of the plot; since the line is anchored right it
+ * landed on the last column — always today, often the tallest bar — where its
+ * opaque background cut the bar in two. Chart chrome gets its own margin rather
+ * than borrowing the data's. */
+.trend:has(.trend__goal) {
+  --goal-gutter: 5rem;
+}
+
+.trend__col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.trend__track {
+  width: 100%;
+  height: var(--track-h);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.trend__bar {
+  width: 100%;
+  max-width: 34px;
+  border-radius: var(--radius-xs) var(--radius-xs) 2px 2px;
+  background: linear-gradient(180deg, var(--brand), rgb(var(--brand-rgb) / 0.32));
+  transition: height var(--dur-slow) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
+  min-height: 3px;
+}
+
+.trend__col:hover .trend__bar {
+  opacity: 0.78;
+}
+
+.trend__bar--empty {
+  background: var(--surface-3);
+}
+
+.trend__bar--over {
+  background: linear-gradient(180deg, var(--warn), rgb(var(--warn-rgb) / 0.3));
+}
+
+.trend__day {
+  font-size: var(--step--2);
+  line-height: 1.2rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Below ~26rem, 14 day labels cannot fit; keep every other one. */
+@media (max-width: 26rem) {
+  .trend__col:nth-child(even) .trend__day {
+    visibility: hidden;
+  }
+
+  /* The word costs a third of the plot width here; the number alone still lands
+   * against the line, and the accessible name keeps it (charts.js). */
+  .trend:has(.trend__goal) {
+    --goal-gutter: 2.7rem;
+  }
+
+  .trend__goal-word {
+    display: none;
+  }
+}
+
+.trend__goal {
+  position: absolute;
+  left: 0;
+  right: var(--goal-gutter);
+  bottom: calc(var(--label-h) + var(--goal-ratio, 0) * var(--track-h));
+  border-top: 1px dashed var(--line-strong);
+  pointer-events: none;
+}
+
+/* Starts where the line ends, so nothing is painted over and no background is
+ * needed to mask the dashes. */
+.trend__goal-label {
+  position: absolute;
+  left: 100%;
+  top: -0.68rem;
+  padding-left: 0.35rem;
+  font-size: var(--step--2);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ==================================================================== AUTH */
+
+.auth {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: min(100%, 420px);
+  margin-inline: auto;
+  padding-block: var(--space-lg);
+}
+
+.auth__head {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+}
+
+.auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* Password strength: four segments, filled by score. */
+.strength {
+  display: flex;
+  gap: 3px;
+}
+
+.strength__seg {
+  flex: 1;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  transition: background var(--dur) var(--ease-out);
+}
+
+.strength__seg.is-on {
+  background: var(--c, var(--brand));
+}
+
+/* ================================================================ SETTINGS */
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding-block: var(--space-2xs);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-row__text {
+  min-width: 0;
+  flex: 1 1 min(100%, 240px);
+}
+
+.settings-row__title {
+  font-weight: 620;
+}
+
+.settings-row__note {
+  font-size: var(--step--2);
+  color: var(--text-muted);
+}
+
+.settings-row__control {
+  flex: 0 0 auto;
+}
+
+/* Goal inputs sit in a fixed-width box so the four rows align. */
+.goal-input {
+  width: 8.5rem;
+}
+
+/* ================================================================== METHOD */
+
+.prose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-width: var(--measure);
+}
+
+.prose h2 {
+  font-size: var(--step-2);
+  margin-top: var(--space-md);
+}
+
+.prose h3 {
+  font-size: var(--step-1);
+  margin-top: var(--space-2xs);
+}
+
+.prose p,
+.prose li {
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+}
+
+.prose ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding-left: 1.15rem;
+}
+
+.prose li {
+  list-style: disc;
+}
+
+.prose li::marker {
+  color: var(--brand);
+}
+
+.prose strong {
+  color: var(--text);
+  font-weight: 660;
+}
+
+/* A formula display block — used in the method page for the volume integral. */
+.formula {
+  padding: var(--space-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--text);
+  overflow-x: auto;
+  line-height: 1.9;
+}
+
+/* =========================================================== ERROR / 404 */
+
+.notfound {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  text-align: center;
+  padding-block: var(--space-2xl);
+}
+
+.notfound__code {
+  font-size: var(--step-5);
+  font-weight: 780;
+  letter-spacing: var(--tracking-tight);
+  background: linear-gradient(105deg, var(--brand), var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

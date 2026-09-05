@@ -1,0 +1,28 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nutriai",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "main:app", "--port", "8100"],
+      "port": 8100,
+      "cwd": "backend"
+    },
+    {
+      "//": "Heuristic backends only. The full stack pulls MiDaS from torch.hub, which asks a y/N trust question on stdin the first time and hangs a headless boot. This config skips torch entirely: the plate-aware segmenter and the colour/texture classifier still exercise every route, which is what UI work needs.",
+      "name": "nutriai-fast",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "ENABLE_TORCH_MODELS=false",
+        "python",
+        "-m",
+        "uvicorn",
+        "main:app",
+        "--port",
+        "8101"
+      ],
+      "port": 8101,
+      "cwd": "backend"
+    }
+  ]
+}

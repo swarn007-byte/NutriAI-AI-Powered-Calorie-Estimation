@@ -1,0 +1,215 @@
+/* Keyframes and animation utilities.
+ *
+ * Kept in one file so the motion vocabulary is auditable in a single read.
+ * base.css collapses every duration to 0.01ms under `prefers-reduced-motion`,
+ * so nothing here needs its own guard — with two exceptions, marked below,
+ * where the animation *is* the information and a static fallback is required.
+ */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 160% 0;
+  }
+  to {
+    background-position: -60% 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* The scanline that sweeps the photo while the pipeline runs. */
+@keyframes scan {
+  0% {
+    top: -8%;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    top: 104%;
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.75);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Stroke-based reveal for the macro donut and sparkline. The dash offset is set
+ * inline by charts.js; this only animates it to zero. */
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes dash-march {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
+/* ------------------------------------------------------- Utility classes */
+
+.anim-rise {
+  animation: rise var(--dur-slow) var(--ease-out) backwards;
+}
+
+.anim-pop {
+  animation: pop var(--dur) var(--ease-spring) backwards;
+}
+
+.anim-fade {
+  animation: fade-in var(--dur) var(--ease-out) backwards;
+}
+
+/* Staggered entrance for lists and grids. Six steps is enough: past the sixth
+ * child the delay would be long enough to feel like lag rather than rhythm, so
+ * later children share the last step. */
+.stagger > * {
+  animation: rise var(--dur-slow) var(--ease-out) backwards;
+}
+.stagger > :nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger > :nth-child(2) {
+  animation-delay: 45ms;
+}
+.stagger > :nth-child(3) {
+  animation-delay: 90ms;
+}
+.stagger > :nth-child(4) {
+  animation-delay: 135ms;
+}
+.stagger > :nth-child(5) {
+  animation-delay: 180ms;
+}
+.stagger > :nth-child(n + 6) {
+  animation-delay: 225ms;
+}
+
+/* Page transitions. Applied by the router on the outgoing/incoming view. */
+.view-enter {
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+
+.view-exit {
+  animation: fade-in var(--dur-fast) var(--ease-out) reverse forwards;
+}
+
+/* A soft attention pulse for the "Not right?" affordance on low-confidence
+ * items — it needs to be noticed without nagging, so it runs three times. */
+.attention {
+  position: relative;
+}
+
+.attention::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 1.5px solid var(--warn);
+  animation: pulse-ring 1.8s var(--ease-out) 3;
+  pointer-events: none;
+}
+
+/* Exception 1: reduced motion must not leave the ring frozen mid-pulse at
+ * scale(0.75) — hide it entirely and let the chip's colour carry the meaning. */
+@media (prefers-reduced-motion: reduce) {
+  .attention::after {
+    display: none;
+  }
+}
+
+/* Exception 2: the scanline is the only signal that work is happening. With
+ * motion reduced it becomes a static band with a slow opacity breathe, which
+ * conveys "in progress" without translation. */
+@media (prefers-reduced-motion: reduce) {
+  .scanline {
+    top: 50% !important;
+    animation: breathe 2s var(--ease-in-out) infinite !important;
+    animation-duration: 2s !important;
+  }
+}

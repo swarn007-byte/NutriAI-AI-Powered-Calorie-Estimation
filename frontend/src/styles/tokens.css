@@ -1,0 +1,205 @@
+/* Design tokens — the single source of truth for colour, type, space, motion.
+ *
+ * Dark is the default because the product is a camera surface: photographs read
+ * truer against a dark ground, and the app is used at mealtimes indoors. Light
+ * is a full peer theme, not an afterthought.
+ *
+ * Every colour is declared as `--x` (final) plus, where it is composited, an
+ * `--x-rgb` triplet so alpha can be applied without a second hard-coded value
+ * drifting out of sync with the first.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- Brand ------------------------------------------------------------ */
+  --brand-rgb: 40 224 139;
+  --brand: rgb(var(--brand-rgb));
+  --brand-soft: rgb(var(--brand-rgb) / 0.14);
+  --brand-line: rgb(var(--brand-rgb) / 0.32);
+  --brand-deep: #0f9c5f;
+  --brand-ink: #04140c; /* text that sits *on* brand fills */
+
+  --accent-rgb: 255 194 75;
+  --accent: rgb(var(--accent-rgb));
+  --accent-soft: rgb(var(--accent-rgb) / 0.15);
+
+  /* ---- Macro identity --------------------------------------------------- */
+  /* Fixed hues, reused in donuts, bars, legends and item chips. A macro must
+   * be the same colour everywhere or the charts stop being readable at a
+   * glance, which is the only reason they exist. */
+  --protein-rgb: 76 201 240;
+  --carbs-rgb: 255 176 32;
+  --fat-rgb: 244 114 182;
+  --fiber-rgb: 163 230 53;
+  --protein: rgb(var(--protein-rgb));
+  --carbs: rgb(var(--carbs-rgb));
+  --fat: rgb(var(--fat-rgb));
+  --fiber: rgb(var(--fiber-rgb));
+
+  /* ---- Status ----------------------------------------------------------- */
+  --ok: #34d399;
+  --warn-rgb: 251 191 36;
+  --warn: rgb(var(--warn-rgb));
+  --warn-soft: rgb(var(--warn-rgb) / 0.14);
+  --danger-rgb: 248 113 113;
+  --danger: rgb(var(--danger-rgb));
+  --danger-soft: rgb(var(--danger-rgb) / 0.14);
+  --info: #818cf8;
+
+  /* ---- Surfaces (dark) -------------------------------------------------- */
+  --bg: #07100c;
+  --bg-tint: #0a1712;
+  --surface-1: #0e1a15;
+  --surface-2: #142520;
+  --surface-3: #1b312a;
+  --surface-glass: rgb(20 37 32 / 0.72);
+  --surface-raised: rgb(255 255 255 / 0.035);
+
+  --line: rgb(255 255 255 / 0.09);
+  --line-strong: rgb(255 255 255 / 0.16);
+
+  /* ---- Text ------------------------------------------------------------- */
+  --text: #eaf5ef;
+  --text-muted: #9db3a9;
+  --text-faint: #6e857c;
+  --text-inverse: #07100c;
+
+  /* ---- Type ------------------------------------------------------------- */
+  --font-sans: "Inter var", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Mono", Menlo,
+    Consolas, monospace;
+
+  /* Fluid scale, 320px → 1440px. clamp() rather than breakpoint jumps so text
+   * never lands at an awkward intermediate size on a 600px tablet. */
+  --step--2: clamp(0.69rem, 0.67rem + 0.1vw, 0.75rem);
+  --step--1: clamp(0.8rem, 0.77rem + 0.15vw, 0.875rem);
+  --step-0: clamp(0.938rem, 0.91rem + 0.14vw, 1rem);
+  --step-1: clamp(1.06rem, 1rem + 0.3vw, 1.25rem);
+  --step-2: clamp(1.25rem, 1.14rem + 0.55vw, 1.6rem);
+  --step-3: clamp(1.5rem, 1.3rem + 1vw, 2.15rem);
+  --step-4: clamp(1.85rem, 1.45rem + 2vw, 2.95rem);
+  --step-5: clamp(2.25rem, 1.6rem + 3.2vw, 4rem);
+
+  --leading-tight: 1.12;
+  --leading-snug: 1.32;
+  --leading-normal: 1.58;
+  --tracking-tight: -0.022em;
+  --tracking-wide: 0.08em;
+
+  /* ---- Space ------------------------------------------------------------ */
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2rem;
+  --space-xl: 3rem;
+  --space-2xl: 4.5rem;
+  --gutter: clamp(1rem, 0.6rem + 2vw, 2.5rem);
+  --measure: 68ch;
+  --shell-max: 1320px;
+
+  /* ---- Radii ------------------------------------------------------------ */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+
+  /* ---- Elevation -------------------------------------------------------- */
+  /* Two-layer shadows: a tight contact shadow plus a wide ambient one. A
+   * single blur reads as fog on dark surfaces. */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 8px rgb(0 0 0 / 0.18);
+  --shadow-md: 0 2px 4px rgb(0 0 0 / 0.32), 0 12px 28px -6px rgb(0 0 0 / 0.42);
+  --shadow-lg: 0 4px 8px rgb(0 0 0 / 0.34), 0 28px 60px -12px rgb(0 0 0 / 0.55);
+  --shadow-glow: 0 0 0 1px var(--brand-line), 0 8px 32px -8px rgb(var(--brand-rgb) / 0.35);
+  --ring: 0 0 0 3px rgb(var(--brand-rgb) / 0.34);
+
+  /* ---- Motion ----------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.46, 0.64, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 130ms;
+  --dur: 220ms;
+  --dur-slow: 420ms;
+  --dur-lazy: 900ms;
+
+  /* ---- Layout chrome ---------------------------------------------------- */
+  --sidebar-w: 252px;
+  --topbar-h: 60px;
+  --tabbar-h: 66px;
+  --z-base: 1;
+  --z-sticky: 20;
+  --z-nav: 40;
+  --z-sheet: 60;
+  --z-toast: 80;
+  --z-modal: 90;
+}
+
+/* Light theme. Not an inversion: the greens are darkened for AA contrast on
+ * white, and the macro hues are deepened for the same reason. Surfaces get a
+ * faint warm cast so a food photo doesn't look like it is floating in a void. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --brand-rgb: 5 150 90;
+  --brand-deep: #047a4a;
+  --brand-ink: #ffffff;
+  --brand-soft: rgb(var(--brand-rgb) / 0.1);
+  --brand-line: rgb(var(--brand-rgb) / 0.26);
+
+  --accent-rgb: 191 122 0;
+
+  --protein-rgb: 14 137 184;
+  --carbs-rgb: 194 116 0;
+  --fat-rgb: 209 60 140;
+  --fiber-rgb: 101 148 15;
+
+  --ok: #067a51;
+  --warn-rgb: 178 106 0;
+  --danger-rgb: 200 46 46;
+  --info: #4f46c8;
+
+  --bg: #f5f8f5;
+  --bg-tint: #eef4ef;
+  --surface-1: #ffffff;
+  --surface-2: #f6faf7;
+  --surface-3: #eaf2ec;
+  --surface-glass: rgb(255 255 255 / 0.82);
+  --surface-raised: rgb(9 40 26 / 0.03);
+
+  --line: rgb(9 40 26 / 0.11);
+  --line-strong: rgb(9 40 26 / 0.22);
+
+  --text: #0c1f17;
+  --text-muted: #4d6459;
+  --text-faint: #71877c;
+  --text-inverse: #ffffff;
+
+  --shadow-sm: 0 1px 2px rgb(9 40 26 / 0.06), 0 2px 8px rgb(9 40 26 / 0.05);
+  --shadow-md: 0 2px 4px rgb(9 40 26 / 0.06), 0 12px 28px -8px rgb(9 40 26 / 0.14);
+  --shadow-lg: 0 4px 10px rgb(9 40 26 / 0.08), 0 28px 60px -14px rgb(9 40 26 / 0.2);
+  --shadow-glow: 0 0 0 1px var(--brand-line), 0 8px 30px -10px rgb(var(--brand-rgb) / 0.3);
+}
+
+/* Users who ask the OS for more contrast get harder lines and brighter text
+ * rather than the low-contrast glass aesthetic. */
+@media (prefers-contrast: more) {
+  :root {
+    --line: rgb(255 255 255 / 0.24);
+    --line-strong: rgb(255 255 255 / 0.42);
+    --text-muted: #c2d6cb;
+    --text-faint: #a3b8ad;
+    --surface-glass: var(--surface-2);
+  }
+  :root[data-theme="light"] {
+    --line: rgb(9 40 26 / 0.3);
+    --line-strong: rgb(9 40 26 / 0.5);
+    --text-muted: #29453a;
+    --text-faint: #3d5a4d;
+    --surface-glass: #ffffff;
+  }
+}

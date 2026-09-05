@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Nutri-AI",
+    "slug": "nutriai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "nutriai",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nutriai.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Nutri-AI uses your camera to analyse a meal photo.",
+        "NSPhotoLibraryUsageDescription": "Nutri-AI uses your photos to analyse a meal."
+      }
+    },
+    "android": {
+      "package": "com.nutriai.app",
+      "permissions": [
+        "READ_MEDIA_IMAGES"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Nutri-AI uses your camera to analyse a meal photo."
+        }
+      ],
+      "expo-image-picker",
+      "expo-secure-store",
+      "expo-font",
+      "expo-status-bar"
+    ]
+  }
+}

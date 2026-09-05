@@ -1,0 +1,47 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Secrets and local config
+.env
+!.env.example
+.claude/settings.local.json
+
+# Local database + user uploads (never commit user meal photos)
+*.db
+*.sqlite3
+backend/uploads/
+data/
+
+# Model weights — large binaries, fetched not committed
+backend/models/*.pt
+backend/models/*.pth
+backend/models/*.onnx
+*.pt
+*.pth
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Expo mobile client
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+
+# The Kaggle/Colab upload bundle — a build artifact, rebuilt from backend/ when
+# needed (TRAINING_LOG.md). Committing it means a second copy of the source that
+# silently goes stale.
+nutriai-backend.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

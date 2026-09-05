@@ -1,0 +1,25 @@
+# Dependencies for the classifier service only — deliberately not a superset of
+# backend/requirements.txt. No database, no auth stack, no scipy/scikit-learn:
+# this process does one thing, and every wheel it does not install is a wheel
+# that cannot slow a cold start or break a deploy.
+
+# --- Service ----------------------------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9      # /classify takes multipart/form-data
+
+# --- Inference --------------------------------------------------------------
+# The CPU build. A free Hugging Face Space has no GPU, and the default wheel
+# drags in ~2.5 GB of CUDA libraries that would never be loaded — see the
+# --extra-index-url in the Dockerfile, which is what actually selects it.
+torch>=2.2
+timm>=0.9                    # supplies efficientnet_b3; torchvision is the fallback
+
+# --- Imaging + numerics -----------------------------------------------------
+pillow>=10.2
+numpy>=1.26
+
+# --- Weight delivery --------------------------------------------------------
+# Only used when CHECKPOINT_PATH is unset and HF_REPO_ID names a model repo,
+# which is the normal path for a Space: the weights live in the Hub, not in git.
+huggingface_hub>=0.20

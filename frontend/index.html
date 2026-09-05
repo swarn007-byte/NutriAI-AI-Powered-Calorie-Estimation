@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Nutri-AI — Calories from a photo</title>
+    <meta
+      name="description"
+      content="Photograph a meal and get every item identified, weighed and costed in calories, macros and micronutrients — with the geometry shown, not hidden."
+    />
+    <meta name="theme-color" content="#07100c" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" href="/src/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/src/assets/favicon.svg" />
+
+    <!-- Load order is the cascade order: tokens define the custom properties every
+         later sheet reads, so it cannot be deferred or reordered. -->
+    <link rel="stylesheet" href="/src/styles/tokens.css" />
+    <link rel="stylesheet" href="/src/styles/base.css" />
+    <link rel="stylesheet" href="/src/styles/layout.css" />
+    <link rel="stylesheet" href="/src/styles/components.css" />
+    <link rel="stylesheet" href="/src/styles/anim.css" />
+    <link rel="stylesheet" href="/src/styles/pages.css" />
+
+    <!-- Resolve the theme before first paint. Without this the dark default
+         paints, then swaps to light on the first frame of module execution —
+         a full-screen flash on every load for light-theme users. -->
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("nutriai.theme") || "system";
+          var light =
+            saved === "light" ||
+            (saved === "system" && window.matchMedia("(prefers-color-scheme: light)").matches);
+          document.documentElement.dataset.theme = light ? "light" : "dark";
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute("content", light ? "#f5f8f5" : "#07100c");
+        } catch (e) {
+          /* private mode: the dark default stands */
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="app" class="app">
+      <!-- The shell (sidebar, top bar, tab bar) and the router outlet are mounted
+           by main.js. This placeholder is what a visitor sees if the module fails
+           to load, so it is a real message rather than an empty div. -->
+      <noscript>
+        <div class="page">
+          <div class="panel panel--warn">
+            <strong>Nutri-AI needs JavaScript.</strong>
+            <p class="small muted">
+              The analysis view is interactive — it draws the detection overlay on your photo and
+              lets you correct any item it got wrong. There is no static fallback that would be
+              honest about the numbers.
+            </p>
+          </div>
+        </div>
+      </noscript>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

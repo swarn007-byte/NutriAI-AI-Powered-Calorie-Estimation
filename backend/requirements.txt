@@ -1,0 +1,33 @@
+# --- Core service -----------------------------------------------------------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9      # multipart/form-data for image upload
+pydantic>=2.6
+
+# --- Persistence ------------------------------------------------------------
+SQLAlchemy>=2.0
+psycopg[binary]>=3.1         # Postgres driver; unused when DATABASE_URL is sqlite
+
+# --- Auth -------------------------------------------------------------------
+PyJWT>=2.8                   # password hashing uses stdlib hashlib.pbkdf2_hmac
+
+# --- Imaging + numerics (the fallback engine needs only these) --------------
+pillow>=10.2
+numpy>=1.26
+scipy>=1.12
+scikit-learn>=1.4
+
+# --- Nutrition source -------------------------------------------------------
+httpx>=0.26                  # USDA FoodData Central client
+
+# --- Optional: the pretrained halves of stages 2 and 3 ----------------------
+# Without these the pipeline still runs end to end on the classical-CV
+# fallbacks and reports engine="heuristic". Install to enable YOLOv8 detection,
+# MiDaS depth and the EfficientNet-B3 classifier:
+#
+#   pip install torch torchvision ultralytics timm
+#
+# torch>=2.2
+# torchvision>=0.17
+# ultralytics>=8.1
+# timm>=0.9
