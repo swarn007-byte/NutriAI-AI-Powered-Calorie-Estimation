@@ -701,7 +701,7 @@
 }
 
 /* The overlay is an SVG in the image's own pixel coordinate system via
- * viewBox, so bbox fractions map exactly regardless of rendered size — no
+ * viewBox, so region fractions map exactly regardless of rendered size — no
  * resize listener, no layout thrash. */
 .plate__overlay {
   position: absolute;
@@ -720,8 +720,12 @@
   transition: fill var(--dur-fast) var(--ease-out), stroke-width var(--dur-fast) var(--ease-out);
 }
 
-/* The label sits above the rect, so hovering it has to count as hovering the
- * box — otherwise the one part with words on it is the one part that does
+.bbox--outline {
+  stroke-linejoin: round;
+}
+
+/* The label sits above the shape, so hovering it has to count as hovering the
+ * region — otherwise the one part with words on it is the one part that does
  * nothing. The group is the only element that covers both. */
 .bbox:hover,
 .bbox-group:hover .bbox,

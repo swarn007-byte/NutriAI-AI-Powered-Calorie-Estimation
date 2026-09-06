@@ -7,14 +7,14 @@ import { macroBar, MACROS } from "../charts.js";
 
 /* --------------------------------------------------------- Annotated photo */
 
-/** The photo with an SVG bounding-box overlay.
+/** The photo with an SVG region overlay.
  *
  *  The SVG uses the *image's own* pixel dimensions as its viewBox, so the
  *  fractional bboxes the API returns map to exact coordinates and the whole
  *  thing scales with the image at any viewport width. No resize observer.
  *
  *  `onHover`/`onSelect` link it to the item list so hovering a row highlights
- *  the box and vice versa — the single most useful affordance on this screen,
+ *  the region and vice versa — the single most useful affordance on this screen,
  *  since a plate of five curries is otherwise unreadable.
  */
 export function plateView(meal, { onHover, onSelect } = {}) {
@@ -41,19 +41,29 @@ export function plateView(meal, { onHover, onSelect } = {}) {
 
     const group = svg("g", { class: "bbox-group", dataset: { item: item.id } });
 
-    const rect = svg("rect", {
-      class: ["bbox", low && "bbox--low"],
-      x,
-      y,
-      width: w,
-      height: h,
-      rx: Math.min(14, w / 6, h / 6),
-      role: "button",
-      "aria-label": `${index + 1}. ${item.display_name}`,
-    });
+    const outline = Array.isArray(item.outline) ? item.outline : [];
+    const shape = outline.length >= 3
+      ? svg("polygon", {
+          class: ["bbox", "bbox--outline", low && "bbox--low"],
+          points: outline
+            .map((point) => `${clamp(Number(point[0]), 0, 1) * width},${clamp(Number(point[1]), 0, 1) * height}`)
+            .join(" "),
+          role: "button",
+          "aria-label": `${index + 1}. ${item.display_name}`,
+        })
+      : svg("rect", {
+          class: ["bbox", low && "bbox--low"],
+          x,
+          y,
+          width: w,
+          height: h,
+          rx: Math.min(14, w / 6, h / 6),
+          role: "button",
+          "aria-label": `${index + 1}. ${item.display_name}`,
+        });
 
-    // The label sits above the box, or inside it when the box is near the top
-    // edge — otherwise it is clipped off the canvas on top-of-frame items.
+    // The label is positioned from the region's bounding box, or inside it when
+    // the region is near the top edge — otherwise it is clipped off the canvas.
     const rawLabel = `${index + 1}. ${item.display_name}`;
     const fontSize = Math.max(13, Math.round(width * 0.019));
     const padX = fontSize * 0.45;
@@ -66,7 +76,7 @@ export function plateView(meal, { onHover, onSelect } = {}) {
     const chipX = Math.max(0, Math.min(x, width - chipW));
 
     group.append(
-      rect,
+      shape,
       svg("rect", {
         class: ["bbox-label__bg", low && "bbox-label__bg--low"],
         x: chipX,
@@ -89,9 +99,9 @@ export function plateView(meal, { onHover, onSelect } = {}) {
       group.addEventListener("mouseleave", () => onHover(null));
     }
     if (onSelect) {
-      rect.addEventListener("click", () => onSelect(item.id));
-      rect.setAttribute("tabindex", "0");
-      rect.addEventListener("keydown", (event) => {
+      shape.addEventListener("click", () => onSelect(item.id));
+      shape.setAttribute("tabindex", "0");
+      shape.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect(item.id);

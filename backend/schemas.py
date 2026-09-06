@@ -99,6 +99,7 @@ class ItemOut(BaseModel):
     fat_g: float
     nutrients: dict[str, Any]
     bbox: BoundingBox | None
+    outline: list[list[float]] = Field(default_factory=list)
     alternatives: list[dict[str, Any]]
     nutrition_source: str | None
     geometry: dict[str, Any] = Field(default_factory=dict)
@@ -244,6 +245,7 @@ class ScannedItemOut(BaseModel):
     low_confidence: bool
     unrecognized: bool
     bbox: BoundingBox | None
+    outline: list[list[float]] = Field(default_factory=list)
     alternatives: list[dict[str, Any]]
     area_cm2: float
     # Non-null only for countable foods. `piece_count` is a guess from area and

@@ -23,7 +23,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import Svg, { Circle, G, Line, Rect, Text as SvgText } from "react-native-svg";
+import Svg, { Circle, G, Line, Polygon, Rect, Text as SvgText } from "react-native-svg";
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 const TOKEN_KEY = "nutriai.mobile.token";
@@ -1528,6 +1528,10 @@ function DetectedPhoto({ meal, image, onSelect }) {
           const y = Math.max(0, Math.min(height, Number(item.bbox.y || 0) * height));
           const w = Math.max(6, Math.min(width - x, Number(item.bbox.w || 0) * width));
           const h = Math.max(6, Math.min(height - y, Number(item.bbox.h || 0) * height));
+          const outline = Array.isArray(item.outline) ? item.outline : [];
+          const points = outline
+            .map((point) => `${Math.max(0, Math.min(1, Number(point?.[0]) || 0)) * width},${Math.max(0, Math.min(1, Number(point?.[1]) || 0)) * height}`)
+            .join(" ");
           const low = item.low_confidence && !item.user_corrected;
           const color = low ? C.amber : C.mint;
           const label = `${index + 1}. ${item.display_name}`;
@@ -1538,17 +1542,29 @@ function DetectedPhoto({ meal, image, onSelect }) {
           const labelY = y >= labelHeight + 7 ? y - labelHeight - 3 : Math.min(height - labelHeight - 4, y + h + 4);
           return (
             <G key={item.id || index}>
-              <Rect
-                x={x}
-                y={y}
-                width={w}
-                height={h}
-                fill={low ? "rgba(240,163,43,0.16)" : "rgba(216,241,135,0.20)"}
-                stroke={color}
-                strokeWidth={Math.max(3, width * 0.006)}
-                strokeDasharray={low ? "12,8" : undefined}
-                onPress={() => onSelect && onSelect(item)}
-              />
+              {outline.length >= 3 ? (
+                <Polygon
+                  points={points}
+                  fill={low ? "rgba(240,163,43,0.16)" : "rgba(216,241,135,0.20)"}
+                  stroke={color}
+                  strokeWidth={Math.max(3, width * 0.006)}
+                  strokeDasharray={low ? "12,8" : undefined}
+                  strokeLinejoin="round"
+                  onPress={() => onSelect && onSelect(item)}
+                />
+              ) : (
+                <Rect
+                  x={x}
+                  y={y}
+                  width={w}
+                  height={h}
+                  fill={low ? "rgba(240,163,43,0.16)" : "rgba(216,241,135,0.20)"}
+                  stroke={color}
+                  strokeWidth={Math.max(3, width * 0.006)}
+                  strokeDasharray={low ? "12,8" : undefined}
+                  onPress={() => onSelect && onSelect(item)}
+                />
+              )}
               <Rect
                 x={labelX}
                 y={labelY}

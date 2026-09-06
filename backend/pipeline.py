@@ -168,6 +168,103 @@ class ScanResult:
     dropped: int = 0
 
 
+def normalized_outline(
+    mask: np.ndarray | None,
+    *,
+    max_points: int = 180,
+) -> list[list[float]]:
+    """Return an ordered, normalized polygon around a pixel region.
+
+    The detector's masks are the actual regions used for area and volume. This
+    converts their pixel boundary to a compact polygon so clients can draw the
+    same shape instead of expanding every region to its bounding rectangle.
+    """
+    if mask is None or not np.asarray(mask).any():
+        return []
+
+    region = np.asarray(mask, dtype=bool)
+    height, width = region.shape
+    edges: dict[tuple[int, int], list[tuple[int, int]]] = {}
+
+    def add_edge(start: tuple[int, int], end: tuple[int, int]) -> None:
+        edges.setdefault(start, []).append(end)
+
+    ys, xs = np.nonzero(region)
+    for y, x in zip(ys.tolist(), xs.tolist()):
+        if y == 0 or not region[y - 1, x]:
+            add_edge((x, y), (x + 1, y))
+        if x == width - 1 or not region[y, x + 1]:
+            add_edge((x + 1, y), (x + 1, y + 1))
+        if y == height - 1 or not region[y + 1, x]:
+            add_edge((x + 1, y + 1), (x, y + 1))
+        if x == 0 or not region[y, x - 1]:
+            add_edge((x, y + 1), (x, y))
+
+    if not edges:
+        return []
+
+    # Mask regions are normally single connected components. At a diagonal
+    # contact there can be more than one outgoing edge; choose the continuation
+    # with the smallest clockwise turn so the visible outer boundary remains
+    # ordered rather than jumping across the region.
+    start = min(edges, key=lambda point: (point[1], point[0]))
+    points: list[tuple[int, int]] = []
+    current = start
+    previous_direction: tuple[int, int] | None = None
+    used: set[tuple[tuple[int, int], tuple[int, int]]] = set()
+    limit = len(edges) * 4 + 8
+
+    for _ in range(limit):
+        points.append(current)
+        candidates = [
+            end for end in edges.get(current, []) if (current, end) not in used
+        ]
+        if not candidates:
+            break
+        if previous_direction is None:
+            next_point = candidates[0]
+        else:
+            def turn_rank(end: tuple[int, int]) -> tuple[int, int, int]:
+                direction = (end[0] - current[0], end[1] - current[1])
+                directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+                old_index = directions.index(previous_direction)
+                new_index = directions.index(direction)
+                return ((new_index - old_index) % 4, end[1], end[0])
+
+            next_point = min(candidates, key=turn_rank)
+        used.add((current, next_point))
+        previous_direction = (next_point[0] - current[0], next_point[1] - current[1])
+        current = next_point
+        if current == start:
+            break
+
+    if len(points) < 3:
+        return []
+
+    # Remove collinear points first; this keeps the payload small for long
+    # straight edges before the point-count simplification below.
+    reduced: list[tuple[int, int]] = []
+    for point in points:
+        if len(reduced) >= 2:
+            ax, ay = reduced[-2]
+            bx, by = reduced[-1]
+            cx, cy = point
+            if (bx - ax) * (cy - by) == (by - ay) * (cx - bx):
+                reduced[-1] = point
+                continue
+        reduced.append(point)
+    points = reduced
+
+    if len(points) > max_points:
+        step = max(1, (len(points) + max_points - 1) // max_points)
+        points = points[::step]
+
+    return [
+        [round(max(0.0, min(1.0, x / width)), 5), round(max(0.0, min(1.0, y / height)), 5)]
+        for x, y in points
+    ]
+
+
 def warm_models() -> None:
     """Load all three networks exactly once, at startup (design.md §12.1)."""
     started = time.perf_counter()
@@ -610,6 +707,7 @@ def analyze_scanned(
         geometry["coarse_confidence"] = round(
             float(scanned.detection.confidence) if scanned.detection is not None else 1.0, 4
         )
+        geometry["outline"] = normalized_outline(scanned.mask)
 
         # ---- Stage 5b: scale nutrients ---------------------------------
         clock = time.perf_counter()
@@ -795,6 +893,7 @@ __all__ = [
     "Remeasurement",
     "ScanResult",
     "ScannedItem",
+    "normalized_outline",
     "analyze_image",
     "analyze_scanned",
     "guess_piece_count",

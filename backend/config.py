@@ -125,6 +125,9 @@ class Settings:
         if o.strip()
     ]
     serve_frontend = _env_bool("SERVE_FRONTEND", True)
+    # Give a brand-new account one pre-analysed sample meal so the history, day
+    # strip and statistics screens have something to render on first launch.
+    seed_welcome_meal = _env_bool("SEED_WELCOME_MEAL", True)
 
     @property
     def is_sqlite(self) -> bool:

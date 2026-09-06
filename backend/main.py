@@ -54,6 +54,7 @@ from db import (
 )
 from imaging import InvalidImageError, encode_jpeg
 from pipeline import NoFoodDetectedError, PipelineUnavailableError, ScanResult, ScannedItem
+from seed import seed_welcome_meal
 
 # How long an abandoned draft keeps its image on disk. Long enough that a user
 # who walks away mid-review can come back to the same tab; short enough that
@@ -180,6 +181,7 @@ def _item_out(item: MealItem) -> schemas.ItemOut:
         fat_g=_num(item.fat_g),
         nutrients=dict(item.nutrients or {}),
         bbox=schemas.BoundingBox(**item.bbox) if item.bbox else None,
+        outline=list(geometry.get("outline") or []),
         alternatives=list(item.alternatives or []),
         nutrition_source=item.nutrition_source,
         geometry=geometry,
@@ -343,7 +345,8 @@ def auth_register(
     # If the caller is holding a guest token, upgrade that same row so the meals
     # they already analysed carry over instead of being orphaned.
     existing = _optional_user(request, session)
-    user = existing if existing is not None and existing.is_guest else User(id=new_id())
+    upgraded = existing is not None and existing.is_guest
+    user = existing if upgraded else User(id=new_id())
     user.email = body.email
     user.name = (body.name or "").strip() or body.email.split("@")[0].title()
     user.password_hash = hash_password(body.password)
@@ -354,6 +357,10 @@ def auth_register(
     user.preferences = preferences
     session.add(user)
     session.flush()
+    # An upgraded guest keeps the welcome meal it was already given, plus whatever
+    # it analysed; only an account that starts from scratch needs one seeded.
+    if not upgraded:
+        seed_welcome_meal(session, user)
     return schemas.AuthPayload(token=create_token(user.id), user=_user_out(user))
 
 
@@ -497,6 +504,7 @@ def _scanned_item_out(item: ScannedItem) -> schemas.ScannedItemOut:
         low_confidence=bool(item.low_confidence),
         unrecognized=bool(item.unrecognized),
         bbox=schemas.BoundingBox(**item.bbox) if item.bbox else None,
+        outline=pipeline.normalized_outline(item.mask),
         alternatives=list(item.alternatives or []),
         area_cm2=_num(item.area_cm2),
         piece_weight_g=item.piece_weight_g,
