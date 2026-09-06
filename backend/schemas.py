@@ -137,6 +137,7 @@ class MealOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     timings_ms: dict[str, Any] = Field(default_factory=dict)
     notes: str | None = None
+    meal_type: str = "unknown"  # breakfast, lunch, dinner, snack
 
 
 class HistoryEntry(BaseModel):

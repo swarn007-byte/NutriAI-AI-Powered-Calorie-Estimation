@@ -76,6 +76,74 @@ MIN_ITEM_AREA_CM2 = 0.5
 # typing the number than correcting ours.
 MAX_PIECE_GUESS = 12
 
+# ---- Regional food bias (based on GPS location) ----------------------------
+# Maps Indian regions to their signature food items. When CLIP is uncertain,
+# it biases towards foods common in the user's region.
+REGION_FOODS: dict[str, list[str]] = {
+    "south": [
+        "dosa", "idli", "vada_pav", "masala_dosa", "medu_vada",
+        "sambhar", "coconut_chutney", "green_chutney",
+        "rasam", "curd_yogurt", "pongal",
+    ],
+    "north": [
+        "roti_chapati", "naan", "paratha", "chole_bhature", "rajma_masala",
+        "dal_makhani", "paneer_butter_masala", "butter_chicken",
+        "chicken_biryani", "dal_tadka",
+    ],
+    "east": [
+        "fish_curry", "plain_rice", "dal", "begun_bhaja",
+        "luchi", "rasgulla", "mishti_doii",
+    ],
+    "west": [
+        "vada_pav", "pav_bhaji", "dhokla", "thepla",
+        "dal_bati", "gatte_ki_sabzi",
+    ],
+    "northeast": [
+        "fish_curry", "plain_rice", "bamboo_shoot", "thukpa",
+        "momos", "chicken_curry",
+    ],
+    "central": [
+        "poha", "dal_tadka", "roti_chapati", "bhindi_masala",
+        "aloo_gobi", "jeera_rice",
+    ],
+}
+
+# Approximate lat/lng bounds for Indian regions
+REGION_BOUNDS: dict[str, dict[str, tuple[float, float]]] = {
+    "south": {"lat": (8.0, 15.5), "lng": (72.0, 81.0)},
+    "north": {"lat": (28.0, 37.0), "lng": (68.0, 98.0)},
+    "east": {"lat": (21.0, 28.0), "lng": (85.0, 98.0)},
+    "west": {"lat": (20.0, 28.0), "lng": (68.0, 78.0)},
+    "northeast": {"lat": (21.0, 30.0), "lng": (89.0, 98.0)},
+    "central": {"lat": (21.0, 27.0), "lng": (74.0, 85.0)},
+}
+
+
+def _get_region_from_coords(latitude: float, longitude: float) -> str | None:
+    """Map GPS coordinates to an Indian region name."""
+    for region, bounds in REGION_BOUNDS.items():
+        lat_min, lat_max = bounds["lat"]
+        lng_min, lng_max = bounds["lng"]
+        if lat_min <= latitude <= lat_max and lng_min <= longitude <= lng_max:
+            return region
+    return None
+
+
+def _get_region_bias(location: dict | None) -> list[str] | None:
+    """Get regional food list from location, or None if outside India."""
+    if not location:
+        return None
+    lat = location.get("latitude")
+    lng = location.get("longitude")
+    if lat is None or lng is None:
+        return None
+    region = _get_region_from_coords(lat, lng)
+    if region and region in REGION_FOODS:
+        log.info("Location %.2f,%.2f → region=%s, biasing foods: %s", lat, lng, region, REGION_FOODS[region][:5])
+        return REGION_FOODS[region]
+    log.info("Location %.2f,%.2f → no regional bias", lat, lng)
+    return None
+
 
 class NoFoodDetectedError(RuntimeError):
     """Nothing food-like in the frame → HTTP 422 (design.md §10)."""
@@ -117,6 +185,7 @@ class AnalysisResult:
     timings_ms: dict[str, float]
     image: Image.Image
     warnings: list[str] = field(default_factory=list)
+    meal_type: str = "unknown"  # breakfast, lunch, dinner, snack
 
 
 @dataclass
@@ -167,6 +236,47 @@ class ScanResult:
     timings_ms: dict[str, float]
     warnings: list[str] = field(default_factory=list)
     dropped: int = 0
+    meal_type: str = "unknown"  # breakfast, lunch, dinner, snack
+
+
+def _detect_meal_type(items: list[ScannedItem]) -> str:
+    """Detect meal type based on time of day and food items present.
+
+    Uses heuristics:
+    - 6-10 AM: likely breakfast (idli, dosa, poha, upma, paratha)
+    - 12-3 PM: likely lunch (rice, dal, sabzi, roti)
+    - 7-10 PM: likely dinner (similar to lunch)
+    - Other times: based on food items
+    """
+    from datetime import datetime, timezone
+
+    hour = datetime.now(timezone.utc).hour
+
+    # Time-based heuristics (IST offset = +5:30)
+    ist_hour = (hour + 5) % 24
+
+    # Get all labels
+    labels = {item.label for item in items}
+
+    # Breakfast foods
+    breakfast_foods = {"idli", "dosa", "masala_dosa", "poha", "upma", "paratha", "medu_vada", "poori"}
+    # Lunch/dinner foods
+    main_meal_foods = {"rice", "plain_rice", "jeera_rice", "roti_chapati", "naan", "dal_tadka", "dal_makhani"}
+
+    if 6 <= ist_hour < 10:
+        if labels & breakfast_foods:
+            return "breakfast"
+        return "breakfast"  # Time suggests breakfast
+    elif 12 <= ist_hour < 15:
+        return "lunch"
+    elif 19 <= ist_hour < 22:
+        return "dinner"
+    elif labels & breakfast_foods:
+        return "breakfast"
+    elif labels & main_meal_foods:
+        return "lunch"  # or dinner, but lunch is more common
+    else:
+        return "snack"
 
 
 def normalized_outline(
@@ -409,10 +519,43 @@ def guess_piece_count(label: str, area_cm2: float) -> int | None:
     return int(min(max(round(area_cm2 / footprint), 1), MAX_PIECE_GUESS))
 
 
+# Labels that a tiny region should never have — they are full-dish names that
+# the classifier hallucinates on small sauce/chutney bowls.
+_SAUCE_IMPOSTERS: frozenset[str] = frozenset({
+    "chicken_curry", "butter_chicken", "fish_curry", "egg_curry",
+    "paneer_butter_masala", "rajma_masala", "chole_masala",
+    "mixed_veg_curry", "dal_tadka", "sambhar", "manchurian",
+})
+
+
+def _classify_sauce(prediction: "classify.Prediction", fallback: str) -> str:
+    """Reclassify a tiny region that was mislabelled as a full dish.
+
+    Uses the dominant hue from the prediction's coarse label (if available)
+    and the pixel colour to pick the most likely condiment.
+    """
+    from classify import SIGNATURES
+
+    # The prediction's top label is wrong at this size; look at colour.
+    # Extract a rough hue from the signature RGB to decide chutney type.
+    rgb = SIGNATURES.get(fallback, {}).get("rgb", (128, 128, 128))
+    r, g, b = rgb
+
+    # Green-dominant → mint/coriander chutney
+    if g > r and g > b and g > 90:
+        return "green_chutney"
+    # Pale/white → coconut chutney
+    if r > 200 and g > 200 and b > 180:
+        return "coconut_chutney"
+    # Default for small brown/red bowls → tamarind chutney
+    return "tamarind_chutney"
+
+
 def scan_image(
     payload: bytes,
     *,
     plate_diameter_cm: float | None = None,
+    location: dict | None = None,
 ) -> ScanResult:
     """Phase one: name and outline what is on the plate. No nutrition at all.
 
@@ -423,6 +566,9 @@ def scan_image(
     `plate_diameter_cm` is still accepted, and still only sets the pixel→cm
     scale. The scan uses it to report each region's area and to guess piece
     counts; the deep pass recomputes both from whatever the user finally enters.
+
+    `location` is an optional dict with latitude/longitude for regional food
+    detection bias — helps CLIP pick the right regional dish.
     """
     if not (detector.ready and classifier.ready):
         raise PipelineUnavailableError("The analysis pipeline is still initialising.")
@@ -510,10 +656,20 @@ def scan_image(
         )
 
     clock = time.perf_counter()
+
+    # CLIP: first classify the FULL plate to get context
+    # If location is provided, get regional food bias
+    region_bias = _get_region_bias(location) if location else None
+    plate_labels = classifier.classify_plate(prepared.pil, top_k=6, region_bias=region_bias)
+    if plate_labels:
+        log.info("CLIP plate-level: %s", [(p["label"], p["confidence"]) for p in plate_labels])
+
+    # Then classify each crop, biased by plate context
     predictions = classifier.predict_crops(
         [row["crop"] for row in measured],
         coarse_labels=[row["coarse"] for row in measured],
         area_fracs=[row["area_frac"] for row in measured],
+        plate_labels=plate_labels,
     )
     timings["classification"] = round((time.perf_counter() - clock) * 1000, 1)
 
@@ -540,7 +696,15 @@ def scan_image(
             elif region_kind == "saturated_round" and prediction.label in {"dal_tadka", "fish_curry"}:
                 label, low_confidence, unrecognized = "sambhar", True, False
 
+        # A tiny region (< 12 cm²) that the classifier calls a curry is almost
+        # certainly a dipping sauce or chutney, not a full dish.  Override the
+        # label based on colour: green → green_chutney, brown/red →
+        # tamarind_chutney, pale → coconut_chutney.  This catches the common
+        # mistake of momo/samosa chutneys being labelled "chicken_curry".
         area_cm2 = float(row["area_cm2"])
+        if area_cm2 < 12.0 and label in _SAUCE_IMPOSTERS:
+            label = _classify_sauce(prediction, label)
+            low_confidence, unrecognized = True, False
         guess = guess_piece_count(label, area_cm2)
         items.append(
             ScannedItem(
@@ -583,6 +747,7 @@ def scan_image(
         timings_ms=timings,
         warnings=warnings,
         dropped=dropped,
+        meal_type=_detect_meal_type(items),
     )
 
 
@@ -792,6 +957,7 @@ def analyze_scanned(
         timings_ms=timings,
         image=scan.image,
         warnings=warnings,
+        meal_type=scan.meal_type,
     )
 
 
@@ -800,14 +966,15 @@ def analyze_image(
     *,
     session: Session | None = None,
     plate_diameter_cm: float | None = None,
+    location: dict | None = None,
 ) -> AnalysisResult:
     """Run both phases back to back, with nobody reviewing in between.
 
     This is the single-shot endpoint: same five stages, same order, no user in
     the loop. Piece counts are the area guess, since there is no one to correct
-    them.
+    them. Location is used for regional food detection bias.
     """
-    scan = scan_image(payload, plate_diameter_cm=plate_diameter_cm)
+    scan = scan_image(payload, plate_diameter_cm=plate_diameter_cm, location=location)
     return analyze_scanned(scan, session=session, plate_diameter_cm=plate_diameter_cm)
 
 

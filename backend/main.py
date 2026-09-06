@@ -193,7 +193,7 @@ def _item_out(item: MealItem) -> schemas.ItemOut:
     )
 
 
-def _meal_out(meal: Meal, *, warnings: list[str] | None = None) -> schemas.MealOut:
+def _meal_out(meal: Meal, *, warnings: list[str] | None = None, meal_type: str = "unknown") -> schemas.MealOut:
     image_url, thumb_url = _media_urls(meal)
     micros = dict(meal.micros or {})
     return schemas.MealOut(
@@ -219,6 +219,7 @@ def _meal_out(meal: Meal, *, warnings: list[str] | None = None) -> schemas.MealO
         warnings=warnings if warnings is not None else list((meal.model_versions or {}).get("_warnings") or []),
         timings_ms=dict((meal.model_versions or {}).get("_timings") or {}),
         notes=meal.notes,
+        meal_type=meal_type,
     )
 
 
@@ -417,6 +418,8 @@ async def analyze_meal(
     image: UploadFile = File(...),
     plate_diameter_cm: float | None = Form(default=None),
     notes: str | None = Form(default=None),
+    latitude: float | None = Form(default=None),
+    longitude: float | None = Form(default=None),
     user: User = Depends(current_user_or_guest),
     session: Session = Depends(get_session),
 ) -> Any:
@@ -431,8 +434,15 @@ async def analyze_meal(
     preferences = dict(user.preferences or {})
     plate_cm = plate_diameter_cm or preferences.get("plate_diameter_cm") or settings.default_plate_diameter_cm
 
+    # Build location context for regional food detection
+    location = None
+    if latitude is not None and longitude is not None:
+        location = {"latitude": latitude, "longitude": longitude}
+
     try:
-        result = pipeline.analyze_image(payload, session=session, plate_diameter_cm=float(plate_cm))
+        result = pipeline.analyze_image(
+            payload, session=session, plate_diameter_cm=float(plate_cm), location=location,
+        )
     except InvalidImageError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except NoFoodDetectedError as exc:
@@ -469,7 +479,7 @@ async def analyze_meal(
     _recalculate_meal(meal)
     session.flush()
 
-    body = _meal_out(meal, warnings=result.warnings).model_dump(mode="json")
+    body = _meal_out(meal, warnings=result.warnings, meal_type=result.meal_type).model_dump(mode="json")
     body["low_confidence"] = any(item.low_confidence for item in meal.items)
     body["token"] = create_token(user.id, is_guest=bool(user.is_guest))
     body["user"] = _user_out(user).model_dump(mode="json")

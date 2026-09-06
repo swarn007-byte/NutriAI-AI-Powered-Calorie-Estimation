@@ -21,6 +21,7 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
+import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import Svg, {
@@ -164,28 +165,49 @@ async function request(path, options = {}, token) {
   return payload;
 }
 
-async function uploadMealImage(asset, token, plateDiameter) {
+async function uploadMealImage(asset, token, plateDiameter, location, retries = 2) {
   const info = await FileSystem.getInfoAsync(asset.uri, { size: true });
   if (!info.exists) throw new Error("That photo is no longer available on this device.");
-  const response = await FileSystem.uploadAsync(`${API_URL}/api/meals/analyze`, asset.uri, {
-    httpMethod: "POST",
-    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-    fieldName: "image",
-    mimeType: asset.mimeType || "image/jpeg",
-    parameters: { plate_diameter_cm: String(plateDiameter || 26) },
-    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-  });
-  let payload = null;
-  try {
-    payload = JSON.parse(response.body);
-  } catch (reason) {
-    payload = null;
+  const params = { plate_diameter_cm: String(plateDiameter || 26) };
+  if (location) {
+    params.latitude = String(location.latitude);
+    params.longitude = String(location.longitude);
   }
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(detailText(payload, `Upload failed (HTTP ${response.status}).`));
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await FileSystem.uploadAsync(`${API_URL}/api/meals/analyze`, asset.uri, {
+        httpMethod: "POST",
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: "image",
+        mimeType: asset.mimeType || "image/jpeg",
+        parameters: params,
+        headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      });
+      let payload = null;
+      try {
+        payload = JSON.parse(response.body);
+      } catch (reason) {
+        payload = null;
+      }
+      if (response.status < 200 || response.status >= 300) {
+        const err = new Error(detailText(payload, `Upload failed (HTTP ${response.status}).`));
+        err.status = response.status;
+        throw err;
+      }
+      if (!payload) throw new Error("The server sent back a response we could not read.");
+      return payload;
+    } catch (err) {
+      lastError = err;
+      // Don't retry on client errors (4xx) — only retry on network/server issues
+      if (err.status && err.status >= 400 && err.status < 500) throw err;
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
   }
-  if (!payload) throw new Error("The server sent back a response we could not read.");
-  return payload;
+  throw lastError;
 }
 
 async function persistSession(token, user) {
@@ -224,10 +246,28 @@ export default function App() {
   const [correction, setCorrection] = useState(null);
   const [upgrading, setUpgrading] = useState(false);
   const [stage, setStage] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
 
   const token = session?.token;
   const user = session?.user;
   const plateDiameter = user?.preferences?.plate_diameter_cm || 26;
+
+  // Get user location on mount (for regional food detection)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          if (loc?.coords) {
+            setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          }
+        }
+      } catch (e) {
+        // Location is optional — app works without it
+      }
+    })();
+  }, []);
 
   const loadDashboardData = useCallback(async (activeToken) => {
     const offset = -new Date().getTimezoneOffset();
@@ -343,21 +383,34 @@ export default function App() {
         timers.push(setTimeout(() => setStage("classify"), 1500));
         timers.push(setTimeout(() => setStage("portion"), 3000));
         timers.push(setTimeout(() => setStage("nutrition"), 4500));
-        const result = await uploadMealImage(asset, token, plateDiameter);
+        const result = await uploadMealImage(asset, token, plateDiameter, userLocation);
         timers.push(setTimeout(() => setStage("done"), 0));
         setMeal(result);
         setScreen("results");
         await loadDashboardData(token);
       } catch (reason) {
         console.error("[analyse] upload failed:", reason);
-        setError(reason.message || "That meal could not be analysed.");
+        // Provide user-friendly error messages
+        let msg = reason.message || "That meal could not be analysed.";
+        if (msg.includes("Network request failed") || msg.includes("fetch")) {
+          msg = "Could not connect to the server. Please check your internet connection and try again.";
+        } else if (msg.includes("timeout") || msg.includes("Timeout")) {
+          msg = "The analysis is taking too long. Please try again with a clearer photo.";
+        } else if (msg.includes("HTTP 503")) {
+          msg = "The server is starting up. Please wait a moment and try again.";
+        } else if (msg.includes("HTTP 413")) {
+          msg = "The photo is too large. Please use a smaller image.";
+        } else if (msg.includes("HTTP 422")) {
+          msg = "No food detected in that photo. Try a clearer image of a plate of food.";
+        }
+        setError(msg);
       } finally {
         timers.forEach(clearTimeout);
         setBusy(false);
         setStage(null);
       }
     },
-    [loadDashboardData, plateDiameter, token],
+    [loadDashboardData, plateDiameter, token, userLocation],
   );
 
   const choosePhoto = useCallback(
@@ -563,15 +616,22 @@ export default function App() {
             </View>
             <Text style={styles.stageTitle}>Analysing your plate</Text>
             {stage === "detect" && <Text style={styles.stageStep}>Detecting food items...</Text>}
-            {stage === "classify" && <Text style={styles.stageStep}>Classifying dishes...</Text>}
-            {stage === "portion" && <Text style={styles.stageStep}>Estimating portions...</Text>}
-            {stage === "nutrition" && <Text style={styles.stageStep}>Calculating nutrition...</Text>}
-            {stage === "done" && <Text style={styles.stageStep}>Done!</Text>}
+            {stage === "classify" && <Text style={styles.stageStep}>Identifying dishes with AI...</Text>}
+            {stage === "portion" && <Text style={styles.stageStep}>Estimating portion sizes...</Text>}
+            {stage === "nutrition" && <Text style={styles.stageStep}>Calculating nutrition values...</Text>}
+            {stage === "done" && <Text style={styles.stageStep}>Analysis complete!</Text>}
             <View style={styles.stageBar}>
               <View style={[styles.stageBarFill, {
-                width: stage === "detect" ? "25%" : stage === "classify" ? "50%" : stage === "portion" ? "75%" : stage === "nutrition" ? "90%" : "100%"
+                width: stage === "detect" ? "20%" : stage === "classify" ? "45%" : stage === "portion" ? "70%" : stage === "nutrition" ? "90%" : "100%"
               }]} />
             </View>
+            <Text style={styles.stageHint}>
+              {stage === "detect" && "Scanning plate for food regions..."}
+              {stage === "classify" && "CLIP AI identifying each dish..."}
+              {stage === "portion" && "Measuring weights from depth..."}
+              {stage === "nutrition" && "Looking up nutritional data..."}
+              {stage === "done" && "Ready to show results"}
+            </Text>
           </View>
         </View>
       ) : null}
@@ -2683,6 +2743,7 @@ const styles = StyleSheet.create({
   stageStep: { fontSize: 13, fontWeight: "600", color: C.ink2, marginBottom: 18, textAlign: "center" },
   stageBar: { width: "100%", height: 5, borderRadius: 3, backgroundColor: C.lineSoft, overflow: "hidden" },
   stageBarFill: { height: 5, borderRadius: 3, backgroundColor: C.green },
+  stageHint: { fontSize: 11, fontWeight: "500", color: C.muted, marginTop: 10, textAlign: "center", fontStyle: "italic" },
 
   stageRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
   stageDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.lineSoft, alignItems: "center", justifyContent: "center" },

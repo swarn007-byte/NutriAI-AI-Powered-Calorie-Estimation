@@ -371,6 +371,78 @@ COMPOSITION: dict[str, dict[str, Any]] = {
         potassium_mg=107, magnesium_mg=5, zinc_mg=0.0, vitamin_a_mcg=3,
         vitamin_c_mg=5, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=3,
     ),
+    "momos": _entry(
+        "Momos (Steamed)", "steamed", 168, 6.4, 24.8, 4.6, 0.58,
+        fiber_g=1.8, sugar_g=1.4, sodium_mg=360, calcium_mg=22, iron_mg=1.2,
+        potassium_mg=140, magnesium_mg=20, zinc_mg=0.7, vitamin_a_mcg=18,
+        vitamin_c_mg=4, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=22,
+    ),
+    "green_chutney": _entry(
+        "Green Chutney (Mint/Coriander)", "condiment", 68, 1.8, 6.2, 4.0, 0.96,
+        fiber_g=2.4, sugar_g=3.2, sodium_mg=320, calcium_mg=52, iron_mg=1.4,
+        potassium_mg=180, magnesium_mg=22, zinc_mg=0.4, vitamin_a_mcg=120,
+        vitamin_c_mg=12, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=28,
+    ),
+    "tamarind_chutney": _entry(
+        "Tamarind Chutney", "condiment", 228, 1.2, 52.0, 0.4, 1.02,
+        fiber_g=2.8, sugar_g=44.0, sodium_mg=280, calcium_mg=34, iron_mg=1.8,
+        potassium_mg=290, magnesium_mg=26, zinc_mg=0.3, vitamin_a_mcg=8,
+        vitamin_c_mg=3, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=14,
+    ),
+    "manchurian": _entry(
+        "Manchurian", "curry", 172, 4.8, 18.0, 8.6, 0.98,
+        fiber_g=2.2, sugar_g=4.8, sodium_mg=520, calcium_mg=32, iron_mg=1.0,
+        potassium_mg=160, magnesium_mg=18, zinc_mg=0.5, vitamin_a_mcg=24,
+        vitamin_c_mg=8, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=16,
+    ),
+    "hakka_noodles": _entry(
+        "Hakka Noodles", "grain", 182, 5.2, 28.0, 5.8, 0.52,
+        fiber_g=2.4, sugar_g=2.6, sodium_mg=480, calcium_mg=24, iron_mg=1.2,
+        potassium_mg=120, magnesium_mg=20, zinc_mg=0.6, vitamin_a_mcg=32,
+        vitamin_c_mg=6, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=18,
+    ),
+    "fried_rice": _entry(
+        "Fried Rice", "rice", 192, 4.6, 30.0, 5.6, 0.68,
+        fiber_g=1.6, sugar_g=1.4, sodium_mg=460, calcium_mg=22, iron_mg=0.8,
+        potassium_mg=100, magnesium_mg=18, zinc_mg=0.5, vitamin_a_mcg=28,
+        vitamin_c_mg=4, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=14,
+    ),
+    "chole_bhature": _entry(
+        "Chole Bhature", "fast_food", 310, 7.8, 34.0, 15.2, 0.72,
+        fiber_g=5.4, sugar_g=3.6, sodium_mg=440, calcium_mg=54, iron_mg=2.2,
+        potassium_mg=280, magnesium_mg=42, zinc_mg=1.0, vitamin_a_mcg=22,
+        vitamin_c_mg=6, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=72,
+    ),
+    "paneer_tikka": _entry(
+        "Paneer Tikka", "protein", 232, 14.8, 6.0, 16.8, 0.92,
+        fiber_g=1.2, sugar_g=2.8, sodium_mg=420, calcium_mg=260, iron_mg=0.8,
+        potassium_mg=180, magnesium_mg=22, zinc_mg=0.9, vitamin_a_mcg=120,
+        vitamin_c_mg=8, vitamin_d_mcg=0.2, vitamin_b12_mcg=0.4, folate_mcg=12,
+    ),
+    "tandoori_chicken": _entry(
+        "Tandoori Chicken", "protein", 210, 26.0, 4.0, 10.0, 1.04,
+        fiber_g=0.8, sugar_g=2.0, sodium_mg=460, calcium_mg=22, iron_mg=1.2,
+        potassium_mg=260, magnesium_mg=26, zinc_mg=1.4, vitamin_a_mcg=68,
+        vitamin_c_mg=6, vitamin_d_mcg=0.3, vitamin_b12_mcg=0.5, folate_mcg=10,
+    ),
+    "dal_makhani": _entry(
+        "Dal Makhani", "dal", 182, 7.2, 18.0, 8.8, 1.02,
+        fiber_g=5.4, sugar_g=3.0, sodium_mg=380, calcium_mg=42, iron_mg=2.0,
+        potassium_mg=310, magnesium_mg=42, zinc_mg=1.0, vitamin_a_mcg=38,
+        vitamin_c_mg=4, vitamin_d_mcg=0.1, vitamin_b12_mcg=0.0, folate_mcg=68,
+    ),
+    "vada_pav": _entry(
+        "Vada Pav", "fast_food", 290, 6.8, 36.0, 13.2, 0.55,
+        fiber_g=3.2, sugar_g=3.0, sodium_mg=420, calcium_mg=28, iron_mg=1.4,
+        potassium_mg=160, magnesium_mg=24, zinc_mg=0.6, vitamin_a_mcg=12,
+        vitamin_c_mg=4, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=18,
+    ),
+    "masala_dosa": _entry(
+        "Masala Dosa", "bread", 248, 5.0, 34.0, 10.2, 0.52,
+        fiber_g=2.0, sugar_g=1.0, sodium_mg=360, calcium_mg=22, iron_mg=1.2,
+        potassium_mg=110, magnesium_mg=30, zinc_mg=0.8, vitamin_a_mcg=14,
+        vitamin_c_mg=4, vitamin_d_mcg=0.0, vitamin_b12_mcg=0.0, folate_mcg=20,
+    ),
 }
 
 # Conservative per-category averages — used when a label resolves to nothing
@@ -459,6 +531,8 @@ PIECE_WEIGHTS: dict[str, tuple[float, float]] = {
     "pizza_slice": (105.0, 150.0),
     "banana": (118.0, 95.0),
     "apple": (182.0, 66.0),
+    "momos": (32.0, 28.0),
+    "vada_pav": (90.0, 140.0),
 }
 
 # Fail at import rather than at request time if a piece weight names a food the

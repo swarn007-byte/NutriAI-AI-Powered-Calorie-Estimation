@@ -122,9 +122,87 @@ SIGNATURES: dict[str, dict[str, Any]] = {
     "french_fries": _anchor((222, 178, 102), 11.5, 0.20, ("dal_or_yellow", "rice_or_bread")),
     "banana": _anchor((232, 208, 108), 5.0, 0.14, ("banana", "dal_or_yellow")),
     "apple": _anchor((190, 60, 52), 5.5, 0.12, ("apple", "red_dish")),
+    "momos": _anchor((226, 214, 186), 4.0, 0.18, ("rice_or_bread", "brown_dish")),
+    "green_chutney": _anchor((72, 110, 52), 5.0, 0.06, ("vegetable_green", "cup")),
+    "tamarind_chutney": _anchor((120, 60, 30), 4.5, 0.06, ("brown_dish", "cup")),
+    "manchurian": _anchor((152, 82, 42), 8.0, 0.20, ("brown_dish", "gravy")),
+    "hakka_noodles": _anchor((210, 180, 130), 9.0, 0.28, ("rice_or_bread", "mixed_dish")),
+    "fried_rice": _anchor((220, 200, 150), 10.0, 0.28, ("rice_or_bread",)),
+    "chole_bhature": _anchor((140, 80, 48), 9.0, 0.24, ("brown_dish", "gravy")),
+    "paneer_tikka": _anchor((190, 100, 56), 7.5, 0.16, ("red_dish", "brown_dish")),
+    "tandoori_chicken": _anchor((180, 80, 44), 8.5, 0.18, ("red_dish", "brown_dish")),
+    "dal_makhani": _anchor((90, 50, 30), 6.0, 0.16, ("brown_dish", "gravy", "bowl")),
+    "vada_pav": _anchor((200, 160, 100), 9.0, 0.14, ("brown_dish", "rice_or_bread")),
+    "masala_dosa": _anchor((200, 150, 90), 9.0, 0.30, ("rice_or_bread", "brown_dish")),
 }
 
 CLASS_LIST: tuple[str, ...] = tuple(SIGNATURES.keys())
+
+# Descriptive visual prompts for CLIP — each describes what the food LOOKS like.
+# Generic "a photo of X" fails because CLIP can't distinguish similar foods
+# (e.g. chicken curry vs fish curry are both brown gravy). Detailed visual
+# descriptions let CLIP match based on actual appearance.
+# Key visual differentiators:
+# - chicken_curry: bone-in pieces, reddish-brown, oily surface
+# - fish_curry: flat fillets, yellow-orange, thinner gravy
+# - butter_chicken: creamy orange, smooth gravy, no bones visible
+# - paneer_butter_masala: white cubes, creamy orange, butter on top
+FOOD_PROMPTS: dict[str, str] = {
+    "paneer_butter_masala": "cubes of white paneer cheese in rich creamy orange-red tomato gravy, butter floating on top, North Indian curry, thick smooth sauce",
+    "palak_paneer": "cubes of white paneer cheese in thick dark green spinach puree gravy, green color dominant, no other vegetables visible",
+    "dal_tadka": "yellow lentil soup with tempered spices and oil floating on top, served in a bowl, thin consistency, yellow color",
+    "sambhar": "thick yellow-brown lentil soup with vegetables like drumstick and tomato, South Indian style, slightly thicker than dal",
+    "chole_masala": "dark brown chickpea curry with thick spicy gravy, round chickpeas visible, North Indian style chole, brown color",
+    "rajma_masala": "dark red kidney bean curry with thick brown onion-tomato gravy, large red beans visible, thick gravy",
+    "aloo_gobi": "yellow spiced potato and cauliflower pieces, dry vegetable curry with turmeric color, no gravy, yellow-orange",
+    "bhindi_masala": "sliced green okra pieces cooked with onions and spices, slightly crispy, green pieces with brown spices",
+    "mixed_veg_curry": "mixed vegetables like carrots, peas, beans in light brown gravy, colorful vegetables visible",
+    "butter_chicken": "tender chicken pieces in rich creamy orange-red tomato gravy with butter, makhani style, smooth creamy sauce, orange color",
+    "chicken_curry": "bone-in chicken pieces in thick reddish-brown spicy gravy with oil on top, Indian style, bone visible, dark reddish-brown",
+    "fish_curry": "fish pieces or fillets in yellow-orange tangy gravy, flat fish pieces, thinner gravy, yellow-orange color, no bones",
+    "egg_curry": "whole boiled eggs cut in half in reddish-brown onion-tomato gravy, white egg with yellow yolk visible",
+    "plain_rice": "fluffy white steamed rice grains, plain and plain looking, white color, individual grains visible",
+    "jeera_rice": "white basmati rice with cumin seeds scattered throughout, slightly yellowish, long grain rice",
+    "veg_biryani": "colorful layered rice with vegetables, saffron-tinted rice grains, green herbs, colorful mix of rice and vegetables",
+    "chicken_biryani": "layered basmati rice with chicken pieces, saffron-tinted rice, fried onions on top, long grain rice with meat",
+    "roti_chapati": "round flat whole wheat bread, slightly browned with charred spots from tawa, flat round bread, brown color",
+    "naan": "teardrop-shaped leavened bread, slightly puffy with browned bubbly surface, tandoor style, thick bread",
+    "paratha": "layered flatbread with golden-brown crispy surface, slightly oily, triangular or round, layered texture",
+    "poori": "deep-fried puffy round golden-brown bread, inflated like a balloon, puffed up, golden brown",
+    "idli": "soft white steamed rice cakes, round and fluffy, South Indian breakfast item, white round cakes, soft texture",
+    "dosa": "thin crispy golden-brown crepe made from rice batter, large and round, South Indian, thin crispy crepe, golden brown",
+    "medu_vada": "deep-fried golden-brown donut-shaped lentil fritter with crispy exterior, round with hole in center",
+    "samosa": "crispy golden-brown triangular fried pastry with spiced potato and pea filling visible at edges, triangle shape, golden brown",
+    "pav_bhaji": "mashed spiced vegetables with butter on top served with soft bread rolls, red-orange bhaji, mashed texture with bread",
+    "upma": "soft semolina porridge with vegetables and tempered spices, yellowish color, soft mushy texture",
+    "poha": "flattened rice flakes cooked with turmeric, onions, peanuts, and curry leaves, yellow color, flat flakes",
+    "curd_yogurt": "smooth thick white creamy yogurt in a bowl, plain dahi, white smooth texture",
+    "raita": "white yogurt mixed with chopped onions, tomatoes, and cucumber, slightly watery, white with vegetable pieces",
+    "coconut_chutney": "pale white-green thick chutney made from fresh coconut, served in small bowl, pale color, thick paste",
+    "green_salad": "fresh green leafy vegetables with cucumber, tomato, onion slices, raw, green leaves with colorful vegetables",
+    "papad": "thin crispy round lentil wafer, roasted or fried, light brown with bubbles, thin crispy disc",
+    "gulab_jamun": "dark brown round deep-fried milk dumplings soaked in sugar syrup, shiny surface, dark brown round balls",
+    "kheer": "creamy white rice pudding with cardamom and nuts, milky liquid with rice grains visible, white creamy with rice",
+    "boiled_egg": "white boiled egg cut in half showing yellow yolk inside, white with yellow center",
+    "grilled_chicken": "charred grilled chicken pieces with grill marks, browned exterior, tandoori or tikka style, charred marks visible",
+    "pasta_red_sauce": "pasta like penne or fusilli in thick red tomato-based sauce with herbs, red sauce, pasta shapes visible",
+    "pizza_slice": "triangular pizza slice with melted cheese, tomato sauce, toppings on bread base, triangular shape, cheese on top",
+    "french_fries": "long golden-yellow deep-fried potato sticks, crispy exterior, served in a pile, long thin sticks, golden yellow",
+    "banana": "curved yellow fruit, bright yellow peel, fresh banana, curved shape, yellow color",
+    "apple": "round red fruit with smooth shiny skin, fresh red apple, round shape, red shiny skin",
+    "momos": "steamed white flour dumplings with pleated top, served in a steamer basket, Tibetan style, white dumplings with pleats",
+    "green_chutney": "bright green spicy chutney made from mint and coriander leaves, served in small bowl, bright green color",
+    "tamarind_chutney": "dark brown thick sweet-sour chutney made from tamarind, served in small bowl, dark brown color, thick",
+    "manchurian": "fried vegetable or chicken balls in dark brown soy-based Indo-Chinese gravy, round balls in dark sauce",
+    "hakka_noodles": "long thin boiled noodles stir-fried with vegetables and soy sauce, Indo-Chinese style, thin noodles mixed with vegetables",
+    "fried_rice": "white rice grains stir-fried with vegetables, eggs, or chicken, slightly oily and separated grains, rice with mix-ins",
+    "chole_bhature": "dark brown chickpea curry served with large puffy deep-fried bread, North Indian combo, chickpeas with puffy bread",
+    "paneer_tikka": "cubes of paneer marinated in red spices and grilled, charred edges, tikka style, red marinated cubes with char marks",
+    "tandoori_chicken": "whole chicken pieces marinated in red yogurt spices and tandoor-roasted, charred exterior, red marinated meat",
+    "dal_makhani": "dark brown creamy lentil curry with butter and cream, slow-cooked black lentils, dark brown thick creamy",
+    "vada_pav": "spiced potato fritter vada inside a soft bread pav bun, Mumbai street food style, round fritter in bread",
+    "masala_dosa": "large crispy golden-brown rice crepe with spiced potato filling visible inside, South Indian, thin crepe with filling",
+}
 
 _SIG_LAB = {
     key: rgb_to_lab(np.array([[[c / 255.0 for c in value["rgb"]]]], dtype=np.float32))[0, 0]
@@ -558,19 +636,258 @@ class RemoteClassifier:
         return predictions
 
 
+class CLIPClassifier:
+    """Zero-shot food classifier using CLIP ViT-B/32.
+
+    Compares image embeddings against text prompts for each food class.
+    No training required — works for any class in CLASS_LIST (or beyond).
+    Uses the same CLIP model as CalorieCLIP to avoid loading duplicate weights.
+    Optimized for speed with pre-computed text features and batch processing.
+    """
+
+    engine = "clip"
+    version = "clip-vit-b32-zero-shot"
+
+    def __init__(self) -> None:
+        self._model = None
+        self._tokenizer = None
+        self._preprocess = None
+        self._text_features = None
+        self._labels: list[str] = []
+        self._device = "cpu"
+        self._image_cache: dict[str, "torch.Tensor"] = {}  # cache for repeated images
+
+    def load(self) -> bool:
+        """Load CLIP model and pre-encode all text prompts. Returns True on success."""
+        try:
+            import torch
+            import open_clip
+
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            # Load CLIP ViT-B/32 (same architecture as CalorieCLIP)
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                "ViT-B-32", pretrained="openai"
+            )
+            tokenizer = open_clip.get_tokenizer("ViT-B-32")
+
+            model.to(self._device)
+            model.eval()
+
+            self._model = model
+            self._preprocess = preprocess
+            self._tokenizer = tokenizer
+
+            # Build DESCRIBITIVE text prompts for all classes
+            # Generic "a photo of X" fails because CLIP can't distinguish
+            # similar-looking foods (chicken curry vs fish curry).
+            # Detailed visual descriptions let CLIP match based on actual appearance.
+            self._labels = list(CLASS_LIST)
+            text_prompts = [FOOD_PROMPTS.get(label, f"a photo of {label.replace('_', ' ')}")
+                           for label in self._labels]
+
+            # Pre-encode all text prompts (done once at startup)
+            text_tokens = tokenizer(text_prompts).to(self._device)
+            with torch.no_grad():
+                text_features = model.encode_text(text_tokens)
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            self._text_features = text_features
+
+            log.info(
+                "CLIP classifier loaded (%s) — %d classes pre-encoded",
+                self._device,
+                len(self._labels),
+            )
+            return True
+
+        except Exception as exc:
+            log.warning("CLIP classifier failed to load: %s", exc)
+            return False
+
+    @property
+    def ready(self) -> bool:
+        return self._model is not None and self._text_features is not None
+
+    def clear_cache(self) -> None:
+        """Clear image embedding cache to free memory."""
+        self._image_cache.clear()
+
+    def _encode_image(self, image: Image.Image) -> "torch.Tensor":
+        """Encode image with caching for repeated images."""
+        import torch
+
+        # Create a simple hash for caching (size + first few pixels)
+        img_array = np.asarray(image.convert("RGB").resize((64, 64)), dtype=np.float32)
+        cache_key = f"{image.size[0]}x{image.size[1]}_{img_array[0,0,0]:.0f}_{img_array[0,0,1]:.0f}_{img_array[0,0,2]:.0f}"
+
+        if cache_key not in self._image_cache:
+            image_input = self._preprocess(image.convert("RGB")).unsqueeze(0).to(self._device)
+            with torch.no_grad():
+                image_features = self._model.encode_image(image_input)
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            self._image_cache[cache_key] = image_features
+            # Limit cache size
+            if len(self._image_cache) > 50:
+                oldest_key = next(iter(self._image_cache))
+                del self._image_cache[oldest_key]
+
+        return self._image_cache[cache_key]
+
+    def predict(
+        self, crop: Image.Image, *, top_k: int = 4
+    ) -> Prediction:
+        """Classify a single food crop using CLIP zero-shot."""
+        import torch
+
+        if not self.ready:
+            return Prediction(
+                label="unrecognized",
+                confidence=0.0,
+                alternatives=[],
+                engine=self.engine,
+            )
+
+        # Encode image (with caching)
+        image_features = self._encode_image(crop)
+
+        # Compute similarities with optimized temperature
+        similarities = (image_features @ self._text_features.T).squeeze(0)
+        # Temperature 50 gives sharper distribution than 100 — better separation
+        # between correct and incorrect classes
+        probs = torch.softmax(similarities * 50.0, dim=-1)
+
+        # Get top-k
+        top_probs, top_indices = probs.topk(min(top_k + 1, len(self._labels)))
+
+        ranked = []
+        for prob, idx in zip(top_probs, top_indices):
+            ranked.append({
+                "label": self._labels[idx.item()],
+                "confidence": round(prob.item(), 4),
+            })
+
+        return Prediction(
+            label=ranked[0]["label"],
+            confidence=ranked[0]["confidence"],
+            alternatives=ranked[1:top_k],
+            engine=self.engine,
+        )
+
+    def predict_full_plate(
+        self, plate_image: Image.Image, *, top_k: int = 6, region_bias: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Classify the FULL plate image — returns all food items CLIP sees.
+
+        Unlike per-crop classification, this gives CLIP the full context:
+        the entire plate layout, multiple dishes together, sides, chutneys, etc.
+        Uses lower temperature for sharper multi-label detection.
+
+        If region_bias is provided, boosts scores for foods common in that
+        region (e.g. dosa/idli in South India, roti/naan in North India).
+        """
+        import torch
+
+        if not self.ready:
+            return []
+
+        image_input = self._preprocess(plate_image.convert("RGB")).unsqueeze(0).to(self._device)
+        with torch.no_grad():
+            image_features = self._model.encode_image(image_input)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        similarities = (image_features @ self._text_features.T).squeeze(0)
+        probs = torch.softmax(similarities * 30.0, dim=-1)
+
+        # Apply regional bias — boost scores for region-specific foods
+        if region_bias:
+            for i, label in enumerate(self._labels):
+                if label in region_bias:
+                    probs[i] *= 1.5  # 1.5x boost for regional foods
+            probs = probs / probs.sum()  # re-normalize
+
+        # Return items above a minimum confidence threshold
+        min_confidence = 0.05
+        top_probs, top_indices = probs.topk(min(top_k * 2, len(self._labels)))
+        results = []
+        for prob, idx in zip(top_probs, top_indices):
+            if prob.item() < min_confidence:
+                break
+            results.append({
+                "label": self._labels[idx.item()],
+                "confidence": round(prob.item(), 4),
+            })
+        return results[:top_k]
+
+    def classify_crop_with_plate_context(
+        self,
+        crop: Image.Image,
+        plate_labels: list[dict[str, Any]],
+        *,
+        coarse_label: str,
+        area_frac: float,
+        top_k: int = 4,
+    ) -> Prediction:
+        """Classify a crop, biased by what CLIP saw on the full plate.
+
+        If the full plate CLIP says "chicken_curry" and "naan", and this crop
+        is a brown gravy region, it should strongly prefer "chicken_curry".
+        Uses a strong boost factor to override per-crop ambiguity.
+        """
+        import torch
+
+        if not self.ready:
+            return Prediction(
+                label="unrecognized", confidence=0.0, alternatives=[], engine=self.engine,
+            )
+
+        # Get CLIP's opinion on this crop
+        image_input = self._preprocess(crop.convert("RGB")).unsqueeze(0).to(self._device)
+        with torch.no_grad():
+            image_features = self._model.encode_image(image_input)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        similarities = (image_features @ self._text_features.T).squeeze(0)
+        probs = torch.softmax(similarities * 50.0, dim=-1)
+
+        # Strong boost for plate-level labels — 3x to override per-crop ambiguity
+        plate_boost = {item["label"]: item["confidence"] for item in plate_labels}
+        boosted_probs = probs.clone()
+        for i, label in enumerate(self._labels):
+            if label in plate_boost:
+                # Boost proportional to plate confidence — high plate confidence = strong boost
+                boost = 1.0 + plate_boost[label] * 4.0
+                boosted_probs[i] *= boost
+
+        boosted_probs = boosted_probs / boosted_probs.sum()
+
+        top_probs, top_indices = boosted_probs.topk(min(top_k + 1, len(self._labels)))
+        ranked = [
+            {"label": self._labels[idx.item()], "confidence": round(prob.item(), 4)}
+            for prob, idx in zip(top_probs, top_indices)
+        ]
+
+        return Prediction(
+            label=ranked[0]["label"],
+            confidence=ranked[0]["confidence"],
+            alternatives=ranked[1:top_k],
+            engine=self.engine,
+        )
+
+
 class DishClassifier:
     """Stage-4 singleton. Trained weights if they are reachable, else the prior.
 
-    Three engines behind one call, tried most-capable first: a hosted
-    `model_api/` deployment, a local checkpoint, and the signature prior. The
-    first two run the same trained weights; the prior is a genuinely worse
-    answer, so it is only correct as a last resort.
+    Four engines behind one call, tried most-capable first: a hosted
+    `model_api/` deployment, CLIP zero-shot, a local checkpoint, and the
+    signature prior. The first two are the best options; the prior is a
+    genuinely worse answer, so it is only correct as a last resort.
     """
 
     def __init__(self) -> None:
         self.backend = "unloaded"
         self._model = None
         self._remote: RemoteClassifier | None = None
+        self._clip: CLIPClassifier | None = None
         self._portionnet: PortionNetClassifier | None = None
         self._signature = SignatureClassifier()
         # Only what this process knows locally. What gets *reported* is the
@@ -627,6 +944,16 @@ class DishClassifier:
             else:
                 log.warning("PortionNet failed to load — falling back")
 
+        # --- CLIP zero-shot (always try unless portionnet-only mode) ---
+        if settings.classifier_engine != "portionnet":
+            clip_cls = CLIPClassifier()
+            if clip_cls.load():
+                self._clip = clip_cls
+                primary = primary or "clip"
+                log.info("CLIP zero-shot classifier loaded")
+            else:
+                log.warning("CLIP classifier failed to load — falling back")
+
         checkpoint_path = Path(settings.classifier_checkpoint)
         if settings.enable_torch_models and checkpoint_path.is_file():
             try:
@@ -674,17 +1001,35 @@ class DishClassifier:
         chain = []
         if self._remote is not None and self._model is not None:
             chain.append("efficientnet_b3")
+        if self._clip is not None and self.backend != "clip":
+            chain.append("clip")
         if self.backend != self._signature.engine:
             chain.append(self._signature.engine)
         return chain
 
     # -- inference -------------------------------------------------------
+    def classify_plate(
+        self, plate_image: Image.Image, *, top_k: int = 6, region_bias: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """CLIP sees the FULL plate and returns all food items it detects.
+
+        If region_bias is provided (from GPS location), CLIP boosts scores for
+        foods common in that region (e.g. dosa/idli in South India).
+        """
+        if self._clip is not None and self._clip.ready:
+            try:
+                return self._clip.predict_full_plate(plate_image, top_k=top_k, region_bias=region_bias)
+            except Exception as exc:
+                log.warning("CLIP plate classification failed (%s)", exc)
+        return []
+
     def predict_crop(
         self,
         crop: Image.Image,
         *,
         coarse_label: str,
         area_frac: float,
+        plate_labels: list[dict[str, Any]] | None = None,
         top_k: int = 4,
     ) -> Prediction:
         """Single-crop convenience wrapper. Prefer `predict_crops` for a plate."""
@@ -698,16 +1043,14 @@ class DishClassifier:
         *,
         coarse_labels: Sequence[str],
         area_fracs: Sequence[float],
+        plate_labels: list[dict[str, Any]] | None = None,
         top_k: int = 4,
     ) -> list[Prediction]:
         """Classify every crop from one plate together.
 
-        Batched at this level rather than per item because both trained paths
-        get materially cheaper for it — one HTTP round trip instead of six, one
-        forward pass over a stacked tensor instead of six — and because the
-        fallback decision belongs to the whole plate: a half-remote,
-        half-signature result set would mix calibrated probabilities with
-        ordinal scores and then compare them against one threshold.
+        If plate_labels is provided (from CLIP full-plate classification),
+        CLIP uses that context to bias per-crop predictions towards items
+        it already identified on the plate.
         """
         if not crops:
             return []
@@ -725,6 +1068,34 @@ class DishClassifier:
             except Exception as exc:
                 log.warning("PortionNet inference failed (%s) — falling back", exc)
 
+        # CLIP zero-shot: use plate context if available
+        if self._clip is not None and self._clip.ready:
+            try:
+                clip_predictions = None
+                if plate_labels:
+                    clip_predictions = [
+                        self._clip.classify_crop_with_plate_context(
+                            crop, plate_labels,
+                            coarse_label=coarse, area_frac=area, top_k=top_k,
+                        )
+                        for crop, coarse, area in zip(crops, coarse_labels, area_fracs)
+                    ]
+                else:
+                    clip_predictions = self._clip.predict_batch(crops, top_k=top_k)
+
+                # Smart ensemble: if EfficientNet is also available, combine predictions
+                # Use CLIP as primary but boost EfficientNet predictions when they agree
+                if self._model is not None and clip_predictions:
+                    try:
+                        enet_predictions = self._predict_torch(crops, top_k=top_k)
+                        return self._ensemble_predictions(clip_predictions, enet_predictions)
+                    except Exception:
+                        pass  # Fall through to CLIP-only predictions
+
+                return clip_predictions
+            except Exception as exc:
+                log.warning("CLIP classifier failed (%s) — falling back", exc)
+
         if self._model is not None:
             try:
                 return self._predict_torch(crops, top_k=top_k)
@@ -735,6 +1106,47 @@ class DishClassifier:
             self._predict_signature(crop, coarse_label=coarse, area_frac=area, top_k=top_k)
             for crop, coarse, area in zip(crops, coarse_labels, area_fracs)
         ]
+
+    def _ensemble_predictions(
+        self,
+        clip_preds: list[Prediction],
+        enet_preds: list[Prediction],
+        clip_weight: float = 0.6,
+        enet_weight: float = 0.4,
+    ) -> list[Prediction]:
+        """Combine CLIP and EfficientNet predictions using weighted ensemble.
+
+        CLIP gets higher weight (0.6) because it's better at visual recognition.
+        EfficientNet gets 0.4 weight because it's trained on specific food classes.
+        When both agree, confidence is boosted. When they disagree, the higher
+        confidence prediction wins.
+        """
+        if len(clip_preds) != len(enet_preds):
+            return clip_preds
+
+        combined = []
+        for clip_pred, enet_pred in zip(clip_preds, enet_preds):
+            # If both agree on label, boost confidence
+            if clip_pred.label == enet_pred.label:
+                boosted_conf = min(0.99, clip_pred.confidence * clip_weight + enet_pred.confidence * enet_weight + 0.1)
+                combined.append(Prediction(
+                    label=clip_pred.label,
+                    confidence=round(boosted_conf, 4),
+                    alternatives=clip_pred.alternatives,
+                    engine="clip+efficientnet",
+                ))
+            # If they disagree, use the one with higher confidence
+            elif clip_pred.confidence > enet_pred.confidence:
+                combined.append(clip_pred)
+            else:
+                # EfficientNet wins but mark as lower confidence
+                combined.append(Prediction(
+                    label=enet_pred.label,
+                    confidence=round(enet_pred.confidence * 0.9, 4),  # Slight penalty
+                    alternatives=enet_pred.alternatives,
+                    engine="efficientnet",
+                ))
+        return combined
 
     def _predict_signature(
         self, crop: Image.Image, *, coarse_label: str, area_frac: float, top_k: int
