@@ -660,7 +660,7 @@ def scan_image(
     # CLIP: first classify the FULL plate to get context
     # If location is provided, get regional food bias
     region_bias = _get_region_bias(location) if location else None
-    plate_labels = classifier.classify_plate(prepared.pil, top_k=6, region_bias=region_bias)
+    plate_labels = classifier.classify_plate(prepared.image, top_k=6, region_bias=region_bias)
     if plate_labels:
         log.info("CLIP plate-level: %s", [(p["label"], p["confidence"]) for p in plate_labels])
 
