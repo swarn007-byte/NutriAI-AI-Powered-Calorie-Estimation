@@ -189,6 +189,149 @@ class SignatureClassifier:
         )
 
 
+class PortionNetClassifier:
+    """PortionNet RGB-only classifier — bridges PortionNet into Prediction format.
+
+    Uses the same architecture as PortionNet (ViT-B/16 + ResNet-18 dual encoder
+    with cross-modal attention), but runs RGB-only at inference (no point clouds).
+    Maps PortionNet's 131 MetaFood3D classes to NutriAI's 42-class catalog via
+    an overlap table; unmatched classes fall through as 'unrecognized'.
+    """
+
+    engine = "portionnet"
+
+    # MetaFood3D class names (131 classes) — from PortionNet's dataset
+    METIFOOD_CLASSES = [
+        "apple", "avocado", "banana", "beef_carpaccio", "beef_tartare",
+        "beet_salad", "beets", "bell_pepper", "bok_choy", "bread_pudding",
+        "breakfast_burrito", "bruschetta", "caesar_salad", "cannoli",
+        "caprese_salad", "carrot", "ceviche", "cheese_plate", "cheesecake",
+        "chicken_curry", "chicken_quesadilla", "chicken_wings",
+        "chocolate_cake", "chocolate_mousse", "clam_chowder", "club_sandwich",
+        "crab_cakes", "creme_brulee", "croque_madame", "cup_cakes",
+        "deviled_eggs", "donuts", "dumplings", "edamame", "eggs_benedict",
+        "escargots", "falafel", "filet_mignon", "fish_and_chips",
+        "foie_gras", "french_fries", "french_onion_soup", "french_toast",
+        "fried_calamari", "fried_rice", "frozen_yogurt", "garlic_bread",
+        "gnocchi", "greek_salad", "grilled_cheese_sandwich",
+        "grilled_salmon", "guacamole", "gyoza", "hamburger", "hot_and_sour_soup",
+        "hot_dog", "huevos_rancheros", "hummus", "ice_cream", "lasagna",
+        "lobster_bisque", "lobster_roll_sandwich", "macaroni_and_cheese",
+        "macarons", "miso_soup", "mussels", "nachos", "omelette",
+        "onion_rings", "oysters", "pad_thai", "paella", "pancakes",
+        "panna_cotta", "peking_duck", "pho", "pizza", "pork_chop",
+        "poutine", "prime_rib", "pulled_pork_sandwich", "ramen",
+        "ravioli", "red_velvet_cake", "risotto", "samosa", "sashimi",
+        "scallops", "seaweed_salad", "shrimp_and_grits", "spaghetti_bolognese",
+        "spaghetti_carbonara", "spring_rolls", "steak", "strawberry_shortcake",
+        "sushi", "tacos", "takoyaki", "tiramisu", "tuna_tartare",
+        "waffles",
+    ]
+
+    # NutriAI → PortionNet class mapping (best-guess visual overlap)
+    NUTRIAI_TO_PORTIONNET: dict[str, str] = {
+        "aloo_paratha": "pancakes",
+        "biryani": "fried_rice",
+        "butter_chicken": "chicken_curry",
+        "dal_makhani": "soup",
+        "dosa": "crepe",
+        "fried_rice": "fried_rice",
+        "gulab_jamun": "donuts",
+        "idli": "dumplings",
+        "jalebi": "waffles",
+        "kadai_paneer": "cheese_plate",
+        "masala_dosa": "crepe",
+        "naan": "bread",
+        "paneer_butter_masala": "cheese_plate",
+        "paratha": "pancakes",
+        "pav_bhaji": "hamburger",
+        "rajma": "soup",
+        "samosa": "samosa",
+        "tandoori_chicken": "grilled_salmon",
+    }
+
+    # Reverse mapping: PortionNet class → NutriAI label
+    PORTIONNET_TO_NUTRIAI: dict[str, str] = {
+        v: k for k, v in NUTRIAI_TO_PORTIONNET.items()
+    }
+
+    def __init__(self) -> None:
+        self._model = None
+        self._device = "cpu"
+        self._loaded = False
+
+    def load(self, checkpoint_path: str | None = None) -> bool:
+        """Load PortionNet model. Returns True if loaded successfully."""
+        if self._loaded:
+            return True
+
+        try:
+            import torch
+            from tools.portionnet.src.models import PortionNet
+
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._model = PortionNet(num_classes=131, feature_dim=256, num_heads=8)
+
+            if checkpoint_path and Path(checkpoint_path).is_file():
+                log.info("Loading PortionNet checkpoint from %s", checkpoint_path)
+                ckpt = torch.load(checkpoint_path, map_location=self._device)
+                self._model.load_state_dict(ckpt["model_state_dict"])
+            else:
+                log.warning(
+                    "No PortionNet checkpoint — using randomly initialized weights "
+                    "(pipeline testing only)"
+                )
+
+            self._model.to(self._device)
+            self._model.eval()
+            self._loaded = True
+            return True
+
+        except Exception as exc:
+            log.warning("PortionNet failed to load (%s)", exc)
+            return False
+
+    def predict(self, image: Image.Image, *, top_k: int = 4) -> Prediction:
+        """Run RGB-only inference and return a Prediction."""
+        import torch
+        from torchvision import transforms
+
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+        tensor = transform(image.convert("RGB")).unsqueeze(0).to(self._device)
+
+        with torch.no_grad():
+            outputs = self._model(tensor, pointcloud=None, mode="rgb_only")
+
+        logits = outputs["class_logits"]
+        probs = torch.softmax(logits, dim=1)
+        top_idx = torch.argmax(probs, dim=1).item()
+        top_prob = probs[0, top_idx].item()
+
+        # Map to NutriAI class
+        raw_name = self.METIFOOD_CLASSES[top_idx] if top_idx < len(self.METIFOOD_CLASSES) else f"class_{top_idx}"
+        mapped_label = self.PORTIONNET_TO_NUTRIAI.get(raw_name, "unrecognized")
+
+        # Top-k alternatives
+        top5 = torch.topk(probs, min(top_k, probs.shape[1]), dim=1)
+        alternatives = []
+        for idx, prob in zip(top5.indices[0].tolist(), top5.values[0].tolist()):
+            raw = self.METIFOOD_CLASSES[idx] if idx < len(self.METIFOOD_CLASSES) else f"class_{idx}"
+            mapped = self.PORTIONNET_TO_NUTRIAI.get(raw, "unrecognized")
+            alternatives.append({"label": mapped, "confidence": round(prob, 4)})
+
+        return Prediction(
+            label=mapped_label,
+            confidence=round(top_prob, 4),
+            alternatives=alternatives[1:],  # exclude top-1 from alternatives
+            engine=self.engine,
+        )
+
+
 class RemoteUnavailable(RuntimeError):
     """Raised inside `RemoteClassifier`; never allowed to escape `DishClassifier`."""
 
@@ -428,6 +571,7 @@ class DishClassifier:
         self.backend = "unloaded"
         self._model = None
         self._remote: RemoteClassifier | None = None
+        self._portionnet: PortionNetClassifier | None = None
         self._signature = SignatureClassifier()
         # Only what this process knows locally. What gets *reported* is the
         # properties below, which prefer the engine that actually answers.
@@ -472,6 +616,16 @@ class DishClassifier:
             remote.probe()
             self._remote = remote
             primary = f"{remote.engine}@remote"
+
+        # --- PortionNet (opt-in via CLASSIFIER_ENGINE=portionnet) -----------
+        if settings.classifier_engine == "portionnet":
+            pn = PortionNetClassifier()
+            if pn.load(settings.portionnet_checkpoint):
+                self._portionnet = pn
+                primary = primary or "portionnet"
+                log.info("PortionNet loaded (RGB-only mode)")
+            else:
+                log.warning("PortionNet failed to load — falling back")
 
         checkpoint_path = Path(settings.classifier_checkpoint)
         if settings.enable_torch_models and checkpoint_path.is_file():
@@ -563,6 +717,13 @@ class DishClassifier:
                 return self._remote.predict(crops, top_k=top_k)
             except RemoteUnavailable as exc:
                 log.warning("Remote classifier unusable (%s) — falling back", exc)
+
+        # PortionNet: one prediction per crop (no batching yet)
+        if self._portionnet is not None:
+            try:
+                return [self._portionnet.predict(crop, top_k=top_k) for crop in crops]
+            except Exception as exc:
+                log.warning("PortionNet inference failed (%s) — falling back", exc)
 
         if self._model is not None:
             try:

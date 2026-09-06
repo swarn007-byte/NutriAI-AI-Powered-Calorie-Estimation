@@ -1,0 +1,89 @@
+# Configuration file for PortionNet training
+
+# Model Architecture
+model:
+  num_classes: 108
+  feature_dim: 256
+  num_heads: 8
+  freeze_backbone: false
+
+# Training
+training:
+  epochs: 25
+  batch_size: 16
+  num_workers: 4
+  
+  # Learning rates
+  lr_backbone: 1.0e-4
+  lr_head: 5.0e-4
+  weight_decay: 0.01
+  
+  # Loss weights
+  lambda_cls: 1.0
+  lambda_reg: 0.1
+  lambda_distill: 0.5
+  
+  # Dual-mode training
+  rgb_only_ratio: 0.3  # 30% of batches in RGB-only mode
+  
+  # Reproducibility
+  seed: 7
+  deterministic: true
+
+# Data
+data:
+  train_split: 0.8
+  use_pointcloud: true
+  num_points: 1024
+  
+  # Augmentation
+  augmentation:
+    resize: 256
+    crop_size: 224
+    horizontal_flip: true
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+
+# Loss function
+loss:
+  label_smoothing: 0.05
+  huber_delta: 0.5
+  distill_temperature: 4.0
+  
+  # Distillation weights
+  distill_mse_weight: 0.7
+  distill_cosine_weight: 0.2
+  distill_kl_weight: 0.1
+  
+  # Regression weights
+  volume_weight: 0.4
+  energy_weight: 0.6
+
+# Optimizer
+optimizer:
+  type: adamw
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+# Scheduler
+scheduler:
+  type: onecycle
+  pct_start: 0.1
+  anneal_strategy: cos
+
+# Logging
+logging:
+  log_interval: 10
+  save_interval: 1
+  tensorboard: true
+  wandb: false
+
+# Paths (update these)
+paths:
+  data_dir: "/path/to/MetaFood3D"
+  excel_path: "/path/to/MetaFood3D/_MetaFood3D_new_complete_dataset_nutrition_v2.xlsx"
+  output_dir: "./outputs"
+  checkpoint_dir: "./checkpoints"

@@ -103,6 +103,14 @@ class Settings:
     )
     enable_torch_models = _env_bool("ENABLE_TORCH_MODELS", True)
 
+    # --- PortionNet (opt-in) ------------------------------------------------
+    # Set CLASSIFIER_ENGINE=portionnet to use PortionNet instead of EfficientNet.
+    # Requires torch + the PortionNet repo cloned into backend/tools/portionnet.
+    classifier_engine = os.getenv("CLASSIFIER_ENGINE") or "efficientnet"
+    portionnet_checkpoint = os.getenv("PORTIONNET_CHECKPOINT") or str(
+        MODEL_DIR / "portionnet_seed7.pt"
+    )
+
     # --- Stage 4 over HTTP ----------------------------------------------
     # The trained classifier is the one stage worth hosting separately: it is the
     # only component that needs torch, and keeping it out of this process means
