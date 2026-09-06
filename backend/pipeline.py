@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 import detection as detection_module
 import nutrition
+from calorieclip import calorieclip
 from classify import classifier
 from config import settings
 from depth import (
@@ -271,13 +272,16 @@ def warm_models() -> None:
     detector.load()
     depth_estimator.load()
     classifier.load()
+    if settings.enable_calorieclip:
+        calorieclip.load()
     _warm_numeric_stack()
     log.info(
-        "Models ready in %.2fs — detector=%s depth=%s classifier=%s",
+        "Models ready in %.2fs — detector=%s depth=%s classifier=%s calorieclip=%s",
         time.perf_counter() - started,
         detector.backend,
         depth_estimator.backend,
         classifier.backend,
+        calorieclip.backend,
     )
 
 
@@ -318,6 +322,12 @@ def model_status() -> dict[str, Any]:
             # isn't.
             "fallback": classifier.fallbacks,
         },
+        "calorieclip": {
+            "backend": calorieclip.backend,
+            "version": calorieclip.version,
+            "ready": calorieclip.backend == "calorieclip",
+            "enabled": settings.enable_calorieclip,
+        },
         "nutrition": {
             "backend": "usda+ifct" if settings.usda_api_key else "ifct",
             "version": "ifct-2017/usda-fdc",
@@ -335,6 +345,12 @@ def engine_name() -> str:
     """
     trained = classifier.is_trained_model
     pretrained = detector.backend == "yolov8" and depth_estimator.backend == "midas"
+    calorieclip_active = calorieclip.backend == "calorieclip"
+
+    if calorieclip_active and trained:
+        return "calorieclip+classifier"
+    if calorieclip_active:
+        return "calorieclip"
     if trained and pretrained:
         return "full"
     if trained or pretrained:
@@ -374,6 +390,7 @@ def _model_versions() -> dict[str, str]:
         "detection": f"{detector.backend}:{detector.version}",
         "depth": f"{depth_estimator.backend}:{depth_estimator.version}",
         "classification": f"{classifier.backend}:{classifier.version}",
+        "calorieclip": f"{calorieclip.backend}:{calorieclip.version}",
         "nutrition": "usda+ifct" if settings.usda_api_key else "ifct",
     }
 
@@ -712,6 +729,29 @@ def analyze_scanned(
         # ---- Stage 5b: scale nutrients ---------------------------------
         clock = time.perf_counter()
         nutrients = nutrition.scale_nutrients(per_100g, weight_g)
+
+        # ---- CalorieCLIP override: replace calories with direct prediction ----
+        calorieclip_calories = 0.0
+        if calorieclip.backend == "calorieclip" and scanned.detection is not None:
+            try:
+                crop = crop_box(scan.image, scanned.detection.bbox)
+                cc_result = calorieclip.predict(crop)
+                calorieclip_calories = cc_result["calories"]
+                if calorieclip_calories > 0 and nutrients.get("calories", 0) > 0:
+                    # Scale macros proportionally to match CalorieCLIP calories
+                    ratio = calorieclip_calories / nutrients["calories"]
+                    nutrients["calories"] = calorieclip_calories
+                    nutrients["protein_g"] = round(nutrients.get("protein_g", 0) * ratio, 1)
+                    nutrients["carbs_g"] = round(nutrients.get("carbs_g", 0) * ratio, 1)
+                    nutrients["fat_g"] = round(nutrients.get("fat_g", 0) * ratio, 1)
+                    # Recalculate kcal from macros as sanity check
+                    macro_kcal = nutrients["protein_g"] * 4 + nutrients["carbs_g"] * 4 + nutrients["fat_g"] * 9
+                    if abs(macro_kcal - calorieclip_calories) > calorieclip_calories * 0.3:
+                        # Macros don't match — keep CalorieCLIP calories, mark source
+                        source = "calorieclip"
+            except Exception as exc:
+                log.debug("CalorieCLIP prediction failed for item %d (%s)", position, exc)
+
         nutrition_ms += (time.perf_counter() - clock) * 1000
 
         items.append(
@@ -726,7 +766,7 @@ def analyze_scanned(
                 estimated_volume_ml=volume_ml,
                 weight_estimated=weight_estimated,
                 nutrients=nutrients,
-                nutrition_source=source,
+                nutrition_source=source if calorieclip_calories == 0 else "calorieclip",
                 bbox=scanned.bbox,
                 alternatives=scanned.alternatives,
                 geometry=geometry,

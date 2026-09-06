@@ -19,21 +19,16 @@ import {
   View,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { Camera, CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import Svg, {
   Circle,
-  Defs,
   G,
   Line,
-  LinearGradient,
   Polygon,
-  RadialGradient,
   Rect,
-  Stop,
   Text as SvgText,
 } from "react-native-svg";
 
@@ -227,8 +222,8 @@ export default function App() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [correction, setCorrection] = useState(null);
-  const [cameraOpen, setCameraOpen] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
+  const [stage, setStage] = useState(null);
 
   const token = session?.token;
   const user = session?.user;
@@ -341,9 +336,15 @@ export default function App() {
     async (asset) => {
       if (!asset || !token) return;
       setBusy(true);
+      setStage("detect");
       setError(null);
+      const timers = [];
       try {
+        timers.push(setTimeout(() => setStage("classify"), 1500));
+        timers.push(setTimeout(() => setStage("portion"), 3000));
+        timers.push(setTimeout(() => setStage("nutrition"), 4500));
         const result = await uploadMealImage(asset, token, plateDiameter);
+        timers.push(setTimeout(() => setStage("done"), 0));
         setMeal(result);
         setScreen("results");
         await loadDashboardData(token);
@@ -351,7 +352,9 @@ export default function App() {
         console.error("[analyse] upload failed:", reason);
         setError(reason.message || "That meal could not be analysed.");
       } finally {
+        timers.forEach(clearTimeout);
         setBusy(false);
+        setStage(null);
       }
     },
     [loadDashboardData, plateDiameter, token],
@@ -361,12 +364,18 @@ export default function App() {
     async (fromCamera) => {
       if (busy) return;
       if (fromCamera) {
-        const permission = await Camera.requestCameraPermissionsAsync();
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
           Alert.alert("Camera access needed", "Enable camera access for Nutri-AI in Settings to snap a plate.");
           return;
         }
-        setCameraOpen(true);
+        const picked = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"],
+          quality: 0.85,
+          allowsMultipleSelection: false,
+        });
+        if (picked.canceled) return;
+        await analyse(picked.assets?.[0]);
         return;
       }
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -524,18 +533,45 @@ export default function App() {
       {screen === "results" ? null : (
         <BottomTabs active={screen} onNavigate={setScreen} onScan={() => choosePhoto(true)} busy={busy} />
       )}
-      <CameraCapture visible={cameraOpen} onClose={() => setCameraOpen(false)} onCapture={analyse} />
       <CorrectionModal
         item={correction}
         busy={busy}
         onClose={() => setCorrection(null)}
         onSave={saveCorrection}
       />
-      {busy && screen !== "results" ? (
-        <View style={styles.blocker} pointerEvents="none">
-          <View style={styles.blockerCard}>
-            <ActivityIndicator color={C.greenDeep} />
-            <Text style={styles.blockerText}>Working on it</Text>
+      {busy && !stage && screen !== "results" ? (
+        <View style={styles.stageOverlay}>
+          <Aurora height={500} />
+          <View style={styles.stageCard}>
+            <View style={styles.stageIconWrap}>
+              <ActivityIndicator size="large" color={C.greenDeep} />
+            </View>
+            <Text style={styles.stageTitle}>Analysing your plate</Text>
+            <Text style={styles.stageStep}>Detecting food items...</Text>
+            <View style={styles.stageBar}>
+              <View style={[styles.stageBarFill, { width: "30%" }]} />
+            </View>
+          </View>
+        </View>
+      ) : null}
+      {busy && stage ? (
+        <View style={styles.stageOverlay}>
+          <Aurora height={500} />
+          <View style={styles.stageCard}>
+            <View style={styles.stageIconWrap}>
+              <ActivityIndicator size="large" color={C.greenDeep} />
+            </View>
+            <Text style={styles.stageTitle}>Analysing your plate</Text>
+            {stage === "detect" && <Text style={styles.stageStep}>Detecting food items...</Text>}
+            {stage === "classify" && <Text style={styles.stageStep}>Classifying dishes...</Text>}
+            {stage === "portion" && <Text style={styles.stageStep}>Estimating portions...</Text>}
+            {stage === "nutrition" && <Text style={styles.stageStep}>Calculating nutrition...</Text>}
+            {stage === "done" && <Text style={styles.stageStep}>Done!</Text>}
+            <View style={styles.stageBar}>
+              <View style={[styles.stageBarFill, {
+                width: stage === "detect" ? "25%" : stage === "classify" ? "50%" : stage === "portion" ? "75%" : stage === "nutrition" ? "90%" : "100%"
+              }]} />
+            </View>
           </View>
         </View>
       ) : null}
@@ -553,34 +589,13 @@ export default function App() {
  *  cheaper than a blur and with no native module. The radii are deliberately
  *  wider than the frame so no edge of a wash is ever visible as a circle.
  */
-let gradientSeq = 0;
 
 function Aurora({ height = 520 }) {
-  // Two Auroras can be on screen at once (a sheet over a screen), and
-  // `url(#id)` resolves per Svg on native — but the ids still have to differ or
-  // the second mount silently reuses the first's gradient.
-  const uid = useRef(`au${(gradientSeq += 1)}`).current;
   return (
     <View style={[styles.aurora, { height }]} pointerEvents="none">
-      <Svg width="100%" height="100%" viewBox="0 0 400 520" preserveAspectRatio="xMidYMin slice">
-        <Defs>
-          <RadialGradient id={`${uid}a`} cx="26%" cy="8%" r="72%">
-            <Stop offset="0" stopColor={C.aurora1} stopOpacity="0.62" />
-            <Stop offset="1" stopColor={C.aurora1} stopOpacity="0" />
-          </RadialGradient>
-          <RadialGradient id={`${uid}b`} cx="92%" cy="2%" r="66%">
-            <Stop offset="0" stopColor={C.aurora2} stopOpacity="0.4" />
-            <Stop offset="1" stopColor={C.aurora2} stopOpacity="0" />
-          </RadialGradient>
-          <RadialGradient id={`${uid}c`} cx="62%" cy="46%" r="58%">
-            <Stop offset="0" stopColor={C.aurora3} stopOpacity="0.26" />
-            <Stop offset="1" stopColor={C.aurora3} stopOpacity="0" />
-          </RadialGradient>
-        </Defs>
-        <Rect x="0" y="0" width="400" height="520" fill={`url(#${uid}a)`} />
-        <Rect x="0" y="0" width="400" height="520" fill={`url(#${uid}b)`} />
-        <Rect x="0" y="0" width="400" height="520" fill={`url(#${uid}c)`} />
-      </Svg>
+      <View style={[styles.auroraWash1]} />
+      <View style={[styles.auroraWash2]} />
+      <View style={[styles.auroraWash3]} />
     </View>
   );
 }
@@ -1101,30 +1116,6 @@ function TopBar({ user, onOpenCalendar, hasAlert }) {
  *  A flat mint fill at this size shows every compression artefact and reads as a
  *  sticker. A diagonal wash from a paler mint plus a soft light source in the
  *  top-left corner gives the card a direction, which is what makes the number
- *  printed on it feel set into a surface rather than typed onto a colour.
- */
-function HeroWash() {
-  const uid = useRef(`hw${(gradientSeq += 1)}`).current;
-  return (
-    <View style={styles.heroWash} pointerEvents="none">
-      <Svg width="100%" height="100%" viewBox="0 0 340 190" preserveAspectRatio="none">
-        <Defs>
-          <LinearGradient id={`${uid}a`} x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={C.mintPale} stopOpacity="1" />
-            <Stop offset="0.55" stopColor={C.mint} stopOpacity="0" />
-          </LinearGradient>
-          <RadialGradient id={`${uid}b`} cx="14%" cy="6%" r="62%">
-            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="0.55" />
-            <Stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-          </RadialGradient>
-        </Defs>
-        <Rect x="0" y="0" width="340" height="190" fill={`url(#${uid}a)`} />
-        <Rect x="0" y="0" width="340" height="190" fill={`url(#${uid}b)`} />
-      </Svg>
-    </View>
-  );
-}
-
 /** Calorie progress and the macro split in one dial.
  *
  *  This replaces a plain ring that showed the same "% of goal" already printed
@@ -1444,8 +1435,9 @@ function HomeScreen({
       <Banner tone="good" text={notice} onDismiss={onDismissNotice} />
 
       <Rise style={styles.hero}>
-        <HeroWash />
+        <View style={styles.heroWashFallback} pointerEvents="none" />
         <Sheen radius={28} />
+        <View style={styles.heroContent}>
         <View style={styles.heroTop}>
           <View style={styles.heroPill}>
             <View style={styles.heroPillDot} />
@@ -1474,6 +1466,7 @@ function HomeScreen({
             carbs={Number(today.carbs_g) || 0}
             fat={Number(today.fat_g) || 0}
           />
+        </View>
         </View>
       </Rise>
 
@@ -2023,7 +2016,7 @@ function ResultsScreen({ meal, busy, onBack, onCorrect }) {
       {image ? <DetectedPhoto meal={meal} image={image} onSelect={onCorrect} /> : null}
 
       <Rise style={styles.totalsCard}>
-        <HeroWash />
+        <View style={styles.heroWashFallback} pointerEvents="none" />
         <Sheen radius={24} />
         <Text style={styles.totalsLabel}>Total energy</Text>
         <View style={styles.statValueRow}>
@@ -2196,75 +2189,6 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
   );
 }
 
-function CameraCapture({ visible, onClose, onCapture }) {
-  const cameraRef = useRef(null);
-  const [ready, setReady] = useState(false);
-  const [shooting, setShooting] = useState(false);
-  const [facing, setFacing] = useState("back");
-
-  useEffect(() => {
-    if (!visible) {
-      setReady(false);
-      setShooting(false);
-    }
-  }, [visible]);
-
-  const shoot = async () => {
-    if (!cameraRef.current || shooting) return;
-    setShooting(true);
-    try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.6, skipProcessing: false });
-      onClose();
-      await onCapture(photo);
-    } catch (reason) {
-      console.error("[camera] capture failed:", reason);
-      Alert.alert("Camera trouble", reason.message || "That shot did not come through. Try again.");
-    } finally {
-      setShooting(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.camWrap}>
-        <StatusBar style="light" />
-        {visible ? (
-          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} onCameraReady={() => setReady(true)} />
-        ) : null}
-        <View style={styles.camTop}>
-          <Pressable style={styles.camRound} onPress={onClose} hitSlop={8}>
-            <Ionicons name="close" size={21} color={C.card} />
-          </Pressable>
-          <View style={styles.camHint}>
-            <Ionicons name="scan-outline" size={14} color={C.mint} />
-            <Text style={styles.camHintText}>Fill the frame with the plate</Text>
-          </View>
-          <Pressable style={styles.camRound} onPress={() => setFacing(facing === "back" ? "front" : "back")} hitSlop={8}>
-            <Ionicons name="camera-reverse-outline" size={21} color={C.card} />
-          </Pressable>
-        </View>
-        <View style={styles.camGuide} pointerEvents="none">
-          {/* Corner brackets over a faint full box: the box says where the crop
-              is, the brackets make it read as a viewfinder rather than a frame. */}
-          <View style={[styles.camGuideCorner, { top: -3, left: -3, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 28 }]} />
-          <View style={[styles.camGuideCorner, { top: -3, right: -3, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 28 }]} />
-          <View style={[styles.camGuideCorner, { bottom: -3, left: -3, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 28 }]} />
-          <View style={[styles.camGuideCorner, { bottom: -3, right: -3, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 28 }]} />
-        </View>
-        <View style={styles.camBottom}>
-          <Text style={styles.camTip}>Shoot straight down, keep the whole plate visible.</Text>
-          <Pressable style={styles.shutter} onPress={shoot} disabled={!ready || shooting}>
-            <View style={[styles.shutterInner, (!ready || shooting) && { backgroundColor: C.muted }]}>
-              {shooting ? <ActivityIndicator color={C.onGreen} /> : <Ionicons name="camera" size={26} color={C.onGreen} />}
-            </View>
-          </Pressable>
-          <Text style={styles.camTip}>{ready ? "Ready" : "Warming up the camera..."}</Text>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function CorrectionModal({ item, busy, onClose, onSave }) {
   const [label, setLabel] = useState("");
   const [weight, setWeight] = useState("");
@@ -2386,8 +2310,11 @@ const styles = StyleSheet.create({
   blockerCard: { backgroundColor: C.card, borderRadius: 20, paddingVertical: 20, paddingHorizontal: 26, alignItems: "center", gap: 10, ...SHADOW },
   blockerText: { color: C.ink2, fontSize: 13, fontWeight: "600" },
 
-  aurora: { position: "absolute", top: 0, left: 0, right: 0 },
-  sheen: { position: "absolute", height: 1, backgroundColor: C.glassLine, opacity: 0.9 },
+  aurora: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 0, elevation: 0 },
+  auroraWash1: { position: "absolute", top: -40, left: -60, width: 300, height: 300, borderRadius: 150, backgroundColor: C.aurora1, opacity: 0.35 },
+  auroraWash2: { position: "absolute", top: -20, right: -40, width: 260, height: 260, borderRadius: 130, backgroundColor: C.aurora2, opacity: 0.25 },
+  auroraWash3: { position: "absolute", top: 160, left: 80, width: 280, height: 280, borderRadius: 140, backgroundColor: C.aurora3, opacity: 0.18 },
+  sheen: { position: "absolute", height: 1, backgroundColor: C.glassLine, opacity: 0.9, zIndex: 1 },
 
   splash: { flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" },
   splashHalo: { position: "absolute", width: 250, height: 250, borderRadius: 125, backgroundColor: C.mint, marginBottom: 48 },
@@ -2474,13 +2401,15 @@ const styles = StyleSheet.create({
   dot: { position: "absolute", top: 9, right: 10, width: 7, height: 7, borderRadius: 4, backgroundColor: C.green, borderWidth: 1.5, borderColor: C.card },
 
   hero: { backgroundColor: C.mint, borderRadius: 28, padding: 18, overflow: "hidden", ...SHADOW_GLOW },
-  heroWash: { ...StyleSheet.absoluteFillObject },
-  heroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
+  heroContent: { zIndex: 3, elevation: 3 },
+  heroWash: { ...StyleSheet.absoluteFillObject, zIndex: 0, elevation: 0 },
+  heroWashFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: C.mintPale, opacity: 0.5 },
+  heroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14, zIndex: 2, elevation: 2 },
   heroPill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(255,255,255,0.75)", borderRadius: 12, paddingVertical: 5, paddingHorizontal: 10 },
   heroPillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.greenDeep },
   heroPillText: { fontSize: 11.5, fontWeight: "700", color: C.onGreen },
   heroDate: { fontSize: 12, fontWeight: "700", color: C.greenDeep },
-  heroRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  heroRow: { flexDirection: "row", alignItems: "center", gap: 14, zIndex: 2, elevation: 2 },
   heroLabel: { fontSize: 13, fontWeight: "700", color: C.greenDeep },
   heroValueRow: { flexDirection: "row", alignItems: "flex-end", gap: 6, marginTop: 4 },
   heroValue: { fontSize: 36, fontWeight: "800", color: C.onGreen, letterSpacing: -1.4, lineHeight: 40 },
@@ -2521,8 +2450,8 @@ const styles = StyleSheet.create({
   calMarkOn: { backgroundColor: C.green },
   calMarkToday: { backgroundColor: C.line },
 
-  fill: { flex: 1 },
-  actionCard: { flex: 1, backgroundColor: C.card, borderRadius: 20, padding: 15, overflow: "hidden", ...SHADOW_SOFT },
+  fill: { flex: 1, zIndex: 1 },
+  actionCard: { flex: 1, backgroundColor: C.card, borderRadius: 20, padding: 15, overflow: "hidden", ...SHADOW_SOFT, zIndex: 1 },
   actionIcon: { width: 36, height: 36, borderRadius: 13, alignItems: "center", justifyContent: "center", marginBottom: 11 },
   actionTitle: { fontSize: 13.5, fontWeight: "800", color: C.ink, letterSpacing: -0.2 },
   actionSub: { fontSize: 11, color: C.muted, fontWeight: "600", marginTop: 2 },
@@ -2702,6 +2631,10 @@ const styles = StyleSheet.create({
   camGuideCorner: { position: "absolute", width: 34, height: 34, borderColor: C.mint, borderWidth: 3 },
   camBottom: { position: "absolute", bottom: 44 + BOTTOM_INSET, left: 18, right: 18, alignItems: "center", gap: 14 },
   camTip: { fontSize: 11.5, color: "rgba(255,255,255,0.78)", fontWeight: "600", textAlign: "center" },
+  camPermError: { position: "absolute", bottom: 160, left: 30, right: 30, alignItems: "center", backgroundColor: "rgba(0,0,0,0.7)", borderRadius: 16, padding: 20 },
+  camPermErrorText: { color: "#fff", fontSize: 13, fontWeight: "600", textAlign: "center", marginTop: 8 },
+  camPermRetry: { marginTop: 12, backgroundColor: C.mint, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 20 },
+  camPermRetryText: { fontSize: 13, fontWeight: "800", color: C.onGreen },
   shutter: { width: 82, height: 82, borderRadius: 41, borderWidth: 3, borderColor: "rgba(255,255,255,0.5)", alignItems: "center", justifyContent: "center" },
   shutterInner: { width: 66, height: 66, borderRadius: 33, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
 
@@ -2728,4 +2661,61 @@ const styles = StyleSheet.create({
   // reads as light spilling out rather than a second, larger button.
   scanHalo: { position: "absolute", width: 70, height: 70, borderRadius: 35, backgroundColor: C.mintSoft, opacity: 0.9 },
   scanBtn: { width: 62, height: 62, borderRadius: 22, backgroundColor: C.green, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
+
+  analyzingWrap: { flex: 1, backgroundColor: C.bg },
+  analyzingContent: { flex: 1, paddingHorizontal: 22, paddingTop: TOP_INSET + 12, paddingBottom: 30 + BOTTOM_INSET },
+  analyzingHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
+  analyzingHeaderText: { fontSize: 17, fontWeight: "800", color: C.ink, letterSpacing: -0.4 },
+  analyzingImageWrap: { width: "100%", height: 180, borderRadius: 20, overflow: "hidden", backgroundColor: C.lineSoft, marginBottom: 16, ...SHADOW },
+  analyzingImage: { width: "100%", height: "100%" },
+  analyzingImageWrapSmall: { width: 80, height: 80, borderRadius: 20, overflow: "hidden", backgroundColor: C.lineSoft, alignSelf: "center", marginBottom: 24, ...SHADOW },
+  analyzingImageSmall: { width: "100%", height: "100%" },
+  analyzingSubhead: { fontSize: 13, fontWeight: "600", color: C.ink2, marginBottom: 16, textAlign: "center" },
+  analyzingHint: { fontSize: 12.5, fontWeight: "600", color: C.muted, textAlign: "center", marginTop: 16 },
+  analyzingTitle: { fontSize: 22, fontWeight: "800", color: C.ink, letterSpacing: -0.5, marginTop: 16 },
+  analyzingError: { fontSize: 13.5, color: C.ink2, textAlign: "center", marginTop: 8, lineHeight: 20 },
+  analyzingErrorIcon: { width: 72, height: 72, borderRadius: 26, backgroundColor: "rgba(217,83,74,0.10)", alignItems: "center", justifyContent: "center" },
+
+  stageOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(240,240,238,0.92)", zIndex: 999, alignItems: "center", justifyContent: "center" },
+  stageCard: { backgroundColor: C.card, borderRadius: 28, paddingVertical: 32, paddingHorizontal: 28, alignItems: "center", width: 270, ...SHADOW },
+  stageIconWrap: { width: 68, height: 68, borderRadius: 24, backgroundColor: C.mintSoft, alignItems: "center", justifyContent: "center", marginBottom: 18 },
+  stageTitle: { fontSize: 18, fontWeight: "800", color: C.ink, letterSpacing: -0.4, marginBottom: 6, textAlign: "center" },
+  stageStep: { fontSize: 13, fontWeight: "600", color: C.ink2, marginBottom: 18, textAlign: "center" },
+  stageBar: { width: "100%", height: 5, borderRadius: 3, backgroundColor: C.lineSoft, overflow: "hidden" },
+  stageBarFill: { height: 5, borderRadius: 3, backgroundColor: C.green },
+
+  stageRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
+  stageDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.lineSoft, alignItems: "center", justifyContent: "center" },
+  stageDotComplete: { backgroundColor: C.green },
+  stageDotActive: { backgroundColor: C.mint },
+  stageDotPending: { backgroundColor: C.lineSoft },
+  stageDotNum: { fontSize: 11, fontWeight: "800", color: C.muted },
+  stageLine: { width: 2, height: 20, backgroundColor: C.lineSoft, marginLeft: 13 },
+  stageLineComplete: { backgroundColor: C.green },
+  stageLinePending: { backgroundColor: C.lineSoft },
+  stageInfo: { flex: 1, marginLeft: 10, marginBottom: 12 },
+  stageLabel: { fontSize: 13, fontWeight: "600", color: C.muted },
+  stageLabelActive: { color: C.ink, fontWeight: "800" },
+  stageLabelComplete: { color: C.greenDeep },
+  stageProgressWrap: { marginTop: 6 },
+  stageProgressBar: { height: 4, borderRadius: 2, backgroundColor: C.lineSoft, overflow: "hidden" },
+  stageProgressFill: { height: 4, borderRadius: 2, backgroundColor: C.green },
+
+  stagesContainer: { backgroundColor: C.card, borderRadius: 22, padding: 18, marginTop: 8, ...SHADOW_SOFT },
+
+  editItemsScroll: { flex: 1, marginBottom: 16 },
+  editItemRow: { flexDirection: "row", alignItems: "center", backgroundColor: C.card, borderRadius: 16, padding: 12, marginBottom: 8, ...SHADOW_SOFT },
+  editItemLow: { borderWidth: 1, borderColor: "rgba(240,163,43,0.4)" },
+  editItemDot: { width: 26, height: 26, borderRadius: 9, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", marginRight: 10 },
+  editItemDotLow: { backgroundColor: "rgba(240,163,43,0.2)" },
+  editItemDotText: { fontSize: 11, fontWeight: "800", color: C.onGreen },
+  editItemContent: { flex: 1 },
+  editItemLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  editItemName: { fontSize: 14, fontWeight: "700", color: C.ink, flex: 1 },
+  editItemLowTag: { backgroundColor: C.amber, borderRadius: 8, paddingVertical: 2, paddingHorizontal: 7 },
+  editItemLowText: { fontSize: 9.5, fontWeight: "800", color: C.onGreen },
+  editItemBtn: { width: 32, height: 32, borderRadius: 10, backgroundColor: C.mintSoft, alignItems: "center", justifyContent: "center", marginLeft: 8 },
+  editItemInputWrap: { flexDirection: "row", alignItems: "center", backgroundColor: C.lineSoft, borderRadius: 10, paddingHorizontal: 10 },
+  editItemInput: { flex: 1, fontSize: 14, fontWeight: "600", color: C.ink, paddingVertical: 8 },
+  editItemSave: { width: 28, height: 28, borderRadius: 9, backgroundColor: C.green, alignItems: "center", justifyContent: "center", marginLeft: 6 },
 });

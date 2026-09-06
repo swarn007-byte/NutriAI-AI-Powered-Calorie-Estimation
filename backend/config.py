@@ -111,6 +111,15 @@ class Settings:
         MODEL_DIR / "portionnet_seed7.pt"
     )
 
+    # --- CalorieCLIP (opt-in calorie estimator) ----------------------------
+    # Set ENABLE_CALORIECLIP=true to use CalorieCLIP for direct calorie
+    # prediction. Replaces the depth → volume → weight → nutrition chain
+    # with a single CLIP forward pass. Trained on Nutrition5k + Food-101.
+    enable_calorieclip = _env_bool("ENABLE_CALORIECLIP", True)
+    calorieclip_checkpoint = os.getenv("CALORIECLIP_CHECKPOINT") or str(
+        MODEL_DIR / "calorie_clip.pt"
+    )
+
     # --- Stage 4 over HTTP ----------------------------------------------
     # The trained classifier is the one stage worth hosting separately: it is the
     # only component that needs torch, and keeping it out of this process means
