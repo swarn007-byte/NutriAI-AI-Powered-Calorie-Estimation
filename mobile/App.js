@@ -156,7 +156,8 @@ function detailText(payload, fallback) {
 }
 
 async function request(path, options = {}, token) {
-  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  const isFormData = options.body instanceof FormData;
+  const headers = { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${API_URL}${path}`, { ...options, headers });
   const payload = await response.json().catch(() => null);
@@ -563,6 +564,52 @@ export default function App() {
     [loadDashboardData, token],
   );
 
+  const updateProfile = useCallback(
+    async (prefs) => {
+      if (!token) return;
+      try {
+        const fresh = await request(
+          "/api/users/me/preferences",
+          { method: "PATCH", body: JSON.stringify(prefs) },
+          token,
+        );
+        setSession((current) => (current ? { ...current, user: fresh } : current));
+        await persistSession(token, fresh);
+      } catch (reason) {
+        setError(reason.message);
+        throw reason;
+      }
+    },
+    [token],
+  );
+
+  const uploadPhoto = useCallback(
+    async (asset) => {
+      if (!token) return;
+      try {
+        const formData = new FormData();
+        formData.append("image", {
+          uri: asset.uri,
+          type: "image/jpeg",
+          name: "photo.jpg",
+        });
+        const fresh = await request(
+          "/api/users/me/photo",
+          {
+            method: "POST",
+            body: formData,
+          },
+          token,
+        );
+        setSession((current) => (current ? { ...current, user: fresh } : current));
+        await persistSession(token, fresh);
+      } catch (reason) {
+        setError(reason.message);
+      }
+    },
+    [token],
+  );
+
   if (phase === "booting") return <Splash />;
   if (phase === "onboarding") return <Onboarding onDone={finishOnboarding} />;
   if (phase === "auth")
@@ -638,6 +685,8 @@ export default function App() {
           onSignOut={signOut}
           onUpgrade={beginUpgrade}
           onUpdateGoal={updateGoal}
+          onUpdateProfile={updateProfile}
+          onUploadPhoto={uploadPhoto}
         />
       ) : null}
       {screen === "results" ? null : (
@@ -1023,6 +1072,8 @@ function AuthScreen({ onAuthenticated, guestToken, onCancel }) {
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(null);
   const [failure, setFailure] = useState(null);
+  const [heightCm, setHeightCm] = useState("");
+  const [weightKg, setWeightKg] = useState("");
   const signup = mode === "signup";
 
   const submit = async () => {
@@ -1039,7 +1090,13 @@ function AuthScreen({ onAuthenticated, guestToken, onCancel }) {
     setFailure(null);
     try {
       const body = signup
-        ? { email: trimmed, password, name: name.trim() || null }
+        ? {
+            email: trimmed,
+            password,
+            name: name.trim() || null,
+            height_cm: heightCm ? parseFloat(heightCm) : null,
+            weight_kg: weightKg ? parseFloat(weightKg) : null,
+          }
         : { email: trimmed, password };
       const payload = await request(
         signup ? "/api/auth/register" : "/api/auth/login",
@@ -1138,6 +1195,32 @@ function AuthScreen({ onAuthenticated, guestToken, onCancel }) {
             onToggleSecure={() => setRevealed((current) => !current)}
             autoComplete={signup ? "new-password" : "current-password"}
           />
+
+          {signup ? (
+            <View style={styles.authRow}>
+              <View style={{ flex: 1 }}>
+                <Field
+                  icon="resize-outline"
+                  label="Height (cm)"
+                  value={heightCm}
+                  onChangeText={setHeightCm}
+                  placeholder="170"
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={{ width: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Field
+                  icon="barbell-outline"
+                  label="Weight (kg)"
+                  value={weightKg}
+                  onChangeText={setWeightKg}
+                  placeholder="70"
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+          ) : null}
 
           {failure ? (
             <View style={styles.authError}>
@@ -1265,13 +1348,13 @@ function MacroRing({ size, ratio, protein, carbs, fat }) {
   return (
     <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
       <Svg width={size} height={size} style={{ backgroundColor: "transparent" }}>
-        <Circle cx={size / 2} cy={size / 2} r={outer + stroke / 2} fill={C.mintSoft} />
+        <Circle cx={size / 2} cy={size / 2} r={outer + stroke / 2} fill="rgba(255,255,255,0.85)" />
         <Circle cx={size / 2} cy={size / 2} r={outer} stroke="rgba(255,255,255,0.62)" strokeWidth={stroke} fill="none" />
         <Circle
           cx={size / 2}
           cy={size / 2}
           r={outer}
-          stroke={C.onGreen}
+          stroke={C.green}
           strokeWidth={stroke}
           fill="none"
           strokeLinecap="round"
@@ -2289,8 +2372,77 @@ function SettingRow({ icon, label, value, onPress, tone }) {
 
 const GOAL_STEPS = [1600, 1800, 2000, 2200, 2500];
 
-function ProfileScreen({ user, summary, history, error, onDismissError, onSignOut, onUpgrade, onUpdateGoal }) {
+function ProfileScreen({ user, summary, history, error, onDismissError, onSignOut, onUpgrade, onUpdateGoal, onUpdateProfile, onUploadPhoto }) {
   const goal = Math.round(Number(summary?.goal?.calories) || 2000);
+  const heightCm = Number(user?.preferences?.height_cm) || 0;
+  const weightKg = Number(user?.preferences?.weight_kg) || 0;
+  const age = Number(user?.preferences?.age) || 0;
+  const gender = user?.preferences?.gender || "";
+  const photoUrl = user?.preferences?.photo_url || "";
+
+  const [editing, setEditing] = useState(false);
+  const [editHeight, setEditHeight] = useState(String(heightCm || ""));
+  const [editWeight, setEditWeight] = useState(String(weightKg || ""));
+  const [editAge, setEditAge] = useState(String(age || ""));
+  const [editGender, setEditGender] = useState(gender);
+  const [busy, setBusy] = useState(false);
+
+  const bmi = heightCm > 0 && weightKg > 0
+    ? (weightKg / ((heightCm / 100) ** 2)).toFixed(1)
+    : null;
+
+  const bmiCategory = bmi
+    ? bmi < 18.5 ? "Underweight"
+      : bmi < 25 ? "Normal"
+        : bmi < 30 ? "Overweight"
+          : "Obese"
+    : null;
+
+  const dailyProtein = weightKg > 0
+    ? Math.round(weightKg * 1.6)
+    : null;
+
+  const startEdit = () => {
+    setEditHeight(String(heightCm || ""));
+    setEditWeight(String(weightKg || ""));
+    setEditAge(String(age || ""));
+    setEditGender(gender);
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    setBusy(true);
+    try {
+      await onUpdateProfile({
+        height_cm: editHeight ? parseFloat(editHeight) : null,
+        weight_kg: editWeight ? parseFloat(editWeight) : null,
+        age: editAge ? parseInt(editAge) : null,
+        gender: editGender || null,
+      });
+      setEditing(false);
+    } catch (e) {
+      // error handled by parent
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pickPhoto = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets?.[0]) {
+        onUploadPhoto(result.assets[0]);
+      }
+    } catch (e) {
+      // user cancelled or error
+    }
+  };
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.screenPad} showsVerticalScrollIndicator={false}>
       <Aurora height={420} />
@@ -2304,12 +2456,20 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
 
       <Rise style={styles.profileCard}>
         <Sheen radius={24} />
-        {/* The avatar sits in its own pool of light — this is the one screen
-            with no photograph on it, so the warmth has to come from somewhere. */}
         <View style={styles.profileGlow} pointerEvents="none" />
-        <View style={styles.profileAvatar}>
-          <Text style={styles.profileAvatarText}>{initialOf(user)}</Text>
-        </View>
+        <Pressable onPress={pickPhoto} style={styles.profileAvatar}>
+          {photoUrl ? (
+            <Image
+              source={{ uri: `${API_URL}${photoUrl}` }}
+              style={{ width: 64, height: 64, borderRadius: 22 }}
+            />
+          ) : (
+            <Text style={styles.profileAvatarText}>{initialOf(user)}</Text>
+          )}
+          <View style={styles.photoBadge}>
+            <Ionicons name="camera" size={12} color={C.onGreen} />
+          </View>
+        </Pressable>
         <Text style={styles.profileName}>{user?.name || "Guest"}</Text>
         <Text style={styles.profileMeta}>
           {`${summary?.streak_days || 0} day streak  ·  ${history?.length || 0} meals`}
@@ -2321,6 +2481,73 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
           </Pressable>
         ) : null}
       </Rise>
+
+      {(bmi || dailyProtein || heightCm > 0) && !editing ? (
+        <>
+          <Text style={styles.groupLabel}>Health metrics</Text>
+          <Rise delay={60} style={styles.settingsCard}>
+            <Sheen radius={22} />
+            {heightCm > 0 ? <SettingRow icon="resize-outline" label="Height" value={`${heightCm} cm`} /> : null}
+            {weightKg > 0 ? <SettingRow icon="barbell-outline" label="Weight" value={`${weightKg} kg`} /> : null}
+            {bmi ? <SettingRow icon="fitness-outline" label="BMI" value={`${bmi} (${bmiCategory})`} /> : null}
+            {dailyProtein ? <SettingRow icon="flash-outline" label="Daily protein" value={`${dailyProtein} g`} sub="Based on body weight" /> : null}
+            <Pressable style={styles.editMetricBtn} onPress={startEdit}>
+              <Ionicons name="pencil" size={14} color={C.onGreen} />
+              <Text style={styles.editMetricText}>Edit</Text>
+            </Pressable>
+          </Rise>
+        </>
+      ) : null}
+
+      {editing ? (
+        <>
+          <Text style={styles.groupLabel}>Edit health metrics</Text>
+          <Rise delay={60} style={styles.settingsCard}>
+            <Sheen radius={22} />
+            <View style={styles.authRow}>
+              <View style={{ flex: 1 }}>
+                <Field icon="resize-outline" label="Height (cm)" value={editHeight} onChangeText={setEditHeight} placeholder="170" keyboardType="numeric" />
+              </View>
+              <View style={{ width: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Field icon="barbell-outline" label="Weight (kg)" value={editWeight} onChangeText={setEditWeight} placeholder="70" keyboardType="numeric" />
+              </View>
+            </View>
+            <View style={styles.authRow}>
+              <View style={{ flex: 1 }}>
+                <Field icon="calendar-outline" label="Age" value={editAge} onChangeText={setEditAge} placeholder="25" keyboardType="numeric" />
+              </View>
+              <View style={{ width: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fieldLabel}>Gender</Text>
+                <View style={styles.genderRow}>
+                  {["Male", "Female", "Other"].map((g) => (
+                    <Pressable
+                      key={g}
+                      style={[styles.genderChip, editGender === g.toLowerCase() && styles.genderChipOn]}
+                      onPress={() => setEditGender(g.toLowerCase())}
+                    >
+                      <Text style={[styles.genderChipText, editGender === g.toLowerCase() && styles.genderChipTextOn]}>{g}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            </View>
+            <View style={styles.editMetricActions}>
+              <Pressable style={({ pressed }) => [styles.ghostBtn, pressed && styles.pressedSoft]} onPress={() => setEditing(false)}>
+                <Text style={styles.ghostBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.primaryBtn, pressed && styles.pressedSoft, busy && styles.btnDisabled]}
+                onPress={saveEdit}
+                disabled={!!busy}
+              >
+                {busy ? <ActivityIndicator color={C.onGreen} /> : <Text style={styles.primaryBtnText}>Save</Text>}
+              </Pressable>
+            </View>
+          </Rise>
+        </>
+      ) : null}
 
       <Text style={styles.groupLabel}>Daily calorie goal</Text>
       <Rise delay={80} style={styles.goalRow}>
@@ -2541,6 +2768,7 @@ const styles = StyleSheet.create({
   authTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 26 },
   authTitle: { fontSize: 32, lineHeight: 37, fontWeight: "800", color: C.ink, letterSpacing: -1 },
   authBody: { marginTop: 10, fontSize: 13.5, lineHeight: 20, color: C.ink2, maxWidth: 330 },
+  authRow: { flexDirection: "row" },
 
   toggle: { flexDirection: "row", backgroundColor: C.lineSoft, borderRadius: 16, padding: 4, marginTop: 22, marginBottom: 6 },
   toggleBtn: { flex: 1, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" },
@@ -2782,12 +3010,21 @@ const styles = StyleSheet.create({
 
   profileCard: { backgroundColor: C.card, borderRadius: 24, padding: 22, alignItems: "center", overflow: "hidden", ...SHADOW },
   profileGlow: { position: "absolute", top: -96, alignSelf: "center", width: 220, height: 220, borderRadius: 110, backgroundColor: C.mintSoft, opacity: 0.8 },
-  profileAvatar: { width: 66, height: 66, borderRadius: 23, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
+  profileAvatar: { width: 66, height: 66, borderRadius: 23, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW, overflow: "visible" },
   profileAvatarText: { fontSize: 26, fontWeight: "800", color: C.onGreen },
   profileName: { fontSize: 19, fontWeight: "800", color: C.ink, marginTop: 13, letterSpacing: -0.5 },
   profileMeta: { fontSize: 12, fontWeight: "600", color: C.muted, marginTop: 4 },
   profileCta: { flexDirection: "row", alignItems: "center", gap: 7, backgroundColor: C.green, borderRadius: 15, paddingVertical: 11, paddingHorizontal: 18, marginTop: 16 },
   profileCtaText: { fontSize: 13, fontWeight: "800", color: C.onGreen },
+  photoBadge: { position: "absolute", bottom: -4, right: -4, width: 24, height: 24, borderRadius: 12, backgroundColor: C.card, alignItems: "center", justifyContent: "center", ...SHADOW_SOFT },
+  editMetricBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 14, borderTopWidth: 1, borderTopColor: C.lineSoft },
+  editMetricText: { fontSize: 13, fontWeight: "700", color: C.onGreen },
+  editMetricActions: { flexDirection: "row", gap: 10, marginTop: 16, paddingHorizontal: 4 },
+  genderRow: { flexDirection: "row", gap: 6, marginTop: 8 },
+  genderChip: { flex: 1, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: C.glass, borderWidth: 1, borderColor: C.line },
+  genderChipOn: { backgroundColor: C.green, borderColor: C.green },
+  genderChipText: { fontSize: 12, fontWeight: "700", color: C.ink2 },
+  genderChipTextOn: { color: C.onGreen },
 
   goalRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   goalChip: { backgroundColor: C.card, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: C.line },

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import logging
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from sqlalchemy.orm import Session
 
 import drafts
@@ -355,6 +357,14 @@ def auth_register(
     preferences = dict(user.preferences or {})
     preferences.setdefault("calorie_goal", 2000)
     preferences.setdefault("plate_diameter_cm", settings.default_plate_diameter_cm)
+    if body.height_cm is not None:
+        preferences["height_cm"] = body.height_cm
+    if body.weight_kg is not None:
+        preferences["weight_kg"] = body.weight_kg
+    if body.gender is not None:
+        preferences["gender"] = body.gender
+    if body.age is not None:
+        preferences["age"] = body.age
     user.preferences = preferences
     session.add(user)
     session.flush()
@@ -388,6 +398,38 @@ def update_preferences(
 ) -> schemas.UserOut:
     preferences = dict(user.preferences or {})
     preferences.update({k: v for k, v in body.model_dump().items() if v is not None})
+    user.preferences = preferences
+    session.add(user)
+    session.flush()
+    return _user_out(user)
+
+
+@app.post("/api/users/me/photo", response_model=schemas.UserOut, tags=["auth"])
+async def upload_profile_photo(
+    image: UploadFile = File(...),
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> schemas.UserOut:
+    """Upload a profile photo for the current user."""
+    payload = await image.read()
+    _read_upload_bytes(image, payload)
+
+    from imaging import read_image
+
+    pil_img = read_image(payload)
+
+    max_dim = settings.max_image_dimension
+    if max(pil_img.size) > max_dim:
+        ratio = max_dim / max(pil_img.size)
+        pil_img = pil_img.resize((int(pil_img.width * ratio), int(pil_img.height * ratio)), Image.LANCZOS)
+
+    photo_path = UPLOAD_DIR / f"profile_{user.id}.jpg"
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=88)
+    photo_path.write_bytes(buf.getvalue())
+
+    preferences = dict(user.preferences or {})
+    preferences["photo_url"] = f"/media/profile_{user.id}"
     user.preferences = preferences
     session.add(user)
     session.flush()
@@ -1049,12 +1091,123 @@ def user_summary(
 
 
 # --------------------------------------------------------------------------
+# Segmentation & Classification (Indian Food)
+# --------------------------------------------------------------------------
+
+@app.post("/api/segment", tags=["ml"])
+async def segment_food(
+    image: UploadFile = File(...),
+    user: User = Depends(current_user_or_guest),
+) -> Any:
+    """Segment food regions from a meal image using Residual U-Net.
+    
+    Returns a binary mask and outline overlay showing food regions.
+    """
+    from imaging import read_image, prepare
+    from food_segmentation import segmentation
+    
+    if not segmentation.backend != "unloaded":
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Segmentation model not loaded.")
+    
+    try:
+        raw = await image.read()
+        if not raw:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Empty image upload.")
+        pil = read_image(raw)
+        result = segmentation.predict(pil)
+        
+        # Convert mask to base64 for API response
+        import base64
+        import io
+        
+        mask_base64 = None
+        if result["mask"] is not None:
+            mask_img = Image.fromarray(result["mask"])
+            buffer = io.BytesIO()
+            mask_img.save(buffer, format="PNG")
+            mask_base64 = base64.b64encode(buffer.getvalue()).decode()
+        
+        overlay_base64 = None
+        if result["outline_overlay"] is not None:
+            buffer = io.BytesIO()
+            result["outline_overlay"].save(buffer, format="PNG")
+            overlay_base64 = base64.b64encode(buffer.getvalue()).decode()
+        
+        return {
+            "mask": mask_base64,
+            "outline_overlay": overlay_base64,
+            "food_area_ratio": result["food_area_ratio"],
+            "latency_ms": result["latency_ms"],
+            "engine": result["engine"],
+        }
+    except Exception as exc:
+        log.error("Segmentation failed: %s", exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Segmentation failed: {exc}")
+
+
+@app.post("/api/classify/indian", tags=["ml"])
+async def classify_indian_food(
+    image: UploadFile = File(...),
+    user: User = Depends(current_user_or_guest),
+) -> Any:
+    """Classify Indian food from a meal image using EfficientNet.
+    
+    Returns the predicted dish name, confidence, and nutrition information.
+    """
+    from imaging import read_image
+    from indian_food_classifier import classifier
+    
+    if not classifier.backend != "unloaded":
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Indian food classifier not loaded.")
+    
+    try:
+        raw = await image.read()
+        if not raw:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Empty image upload.")
+        pil = read_image(raw)
+        result = classifier.predict(pil)
+        
+        return {
+            "class": result["class"],
+            "confidence": result["confidence"],
+            "all_predictions": result["all_predictions"],
+            "nutrition": result["nutrition"],
+            "latency_ms": result["latency_ms"],
+            "engine": result["engine"],
+        }
+    except Exception as exc:
+        log.error("Indian food classification failed: %s", exc)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Classification failed: {exc}")
+
+
+@app.get("/api/foods/indian", tags=["foods"])
+async def list_indian_foods() -> Any:
+    """List all supported Indian food items with calorie information."""
+    from indian_food_classifier import INDIAN_FOOD_CALORIES
+    
+    foods = []
+    for food_name, info in INDIAN_FOOD_CALORIES.items():
+        foods.append({
+            "name": food_name,
+            "display_name": food_name.replace("_", " ").title(),
+            **info,
+        })
+    
+    return {"foods": foods, "count": len(foods)}
+
+
+# --------------------------------------------------------------------------
 # Media
 # --------------------------------------------------------------------------
 
 @app.get("/media/{meal_id}", tags=["media"])
 def meal_media(meal_id: str, t: str = Query(default=""), size: str = Query(default="full")) -> FileResponse:
     """Capability-URL image access — the token only ever reaches the owner."""
+    if meal_id.startswith("profile_"):
+        path = UPLOAD_DIR / f"{meal_id}.jpg"
+        if not path.exists():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found.")
+        return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
     if not _verify_media_token(meal_id, t):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Invalid image link.")
     full, thumb = _image_paths(meal_id)

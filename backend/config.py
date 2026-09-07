@@ -120,6 +120,20 @@ class Settings:
         MODEL_DIR / "calorie_clip.pt"
     )
 
+    # --- Food Segmentation (Residual U-Net) --------------------------------
+    # Food outline detection for visual overlay and portion estimation.
+    enable_segmentation = _env_bool("ENABLE_SEGMENTATION", True)
+    segmentation_checkpoint = os.getenv("SEGMENTATION_CHECKPOINT") or str(
+        MODEL_DIR / "best_olk_residual_unet.pt"
+    )
+
+    # --- Indian Food Classification (EfficientNet) -------------------------
+    # 24-class Indian food classifier with calorie lookup.
+    enable_indian_classification = _env_bool("ENABLE_INDIAN_CLASSIFICATION", True)
+    classification_checkpoint = os.getenv("CLASSIFICATION_CHECKPOINT") or str(
+        MODEL_DIR / "efficientnet_v1.pt"
+    )
+
     # --- Stage 4 over HTTP ----------------------------------------------
     # The trained classifier is the one stage worth hosting separately: it is the
     # only component that needs torch, and keeping it out of this process means

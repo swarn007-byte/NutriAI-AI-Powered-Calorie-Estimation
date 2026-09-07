@@ -38,6 +38,10 @@ class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8, max_length=128)
     name: str | None = Field(default=None, max_length=120)
+    height_cm: float | None = Field(default=None, ge=50.0, le=300.0)
+    weight_kg: float | None = Field(default=None, ge=10.0, le=500.0)
+    gender: str | None = Field(default=None, max_length=10)
+    age: int | None = Field(default=None, ge=5, le=120)
 
     _normalize_email = field_validator("email")(classmethod(lambda cls, v: _clean_email(v)))
 
@@ -56,6 +60,11 @@ class Preferences(BaseModel):
     fat_goal_g: int | None = Field(default=None, ge=10, le=300)
     plate_diameter_cm: float | None = Field(default=None, ge=12.0, le=45.0)
     theme: str | None = None
+    height_cm: float | None = Field(default=None, ge=50.0, le=300.0)
+    weight_kg: float | None = Field(default=None, ge=10.0, le=500.0)
+    gender: str | None = Field(default=None, max_length=10)
+    age: int | None = Field(default=None, ge=5, le=120)
+    photo_url: str | None = None
 
     @field_validator("theme")
     @classmethod

@@ -377,13 +377,19 @@ def normalized_outline(
 
 
 def warm_models() -> None:
-    """Load all three networks exactly once, at startup (design.md §12.1)."""
+    """Load all networks exactly once, at startup (design.md §12.1)."""
     started = time.perf_counter()
     detector.load()
     depth_estimator.load()
     classifier.load()
     if settings.enable_calorieclip:
         calorieclip.load()
+    if settings.enable_segmentation:
+        from food_segmentation import segmentation
+        segmentation.load()
+    if settings.enable_indian_classification:
+        from indian_food_classifier import classifier as indian_classifier
+        indian_classifier.load()
     _warm_numeric_stack()
     log.info(
         "Models ready in %.2fs — detector=%s depth=%s classifier=%s calorieclip=%s",
@@ -412,6 +418,9 @@ def _warm_numeric_stack() -> None:
 
 
 def model_status() -> dict[str, Any]:
+    from food_segmentation import segmentation
+    from indian_food_classifier import classifier as indian_classifier
+    
     return {
         "detection": {"backend": detector.backend, "version": detector.version, "ready": detector.ready},
         "depth": {
@@ -437,6 +446,19 @@ def model_status() -> dict[str, Any]:
             "version": calorieclip.version,
             "ready": calorieclip.backend == "calorieclip",
             "enabled": settings.enable_calorieclip,
+        },
+        "segmentation": {
+            "backend": segmentation.backend,
+            "version": segmentation.version,
+            "ready": segmentation.backend != "unloaded",
+            "enabled": settings.enable_segmentation,
+        },
+        "indian_classifier": {
+            "backend": indian_classifier.backend,
+            "version": indian_classifier.version,
+            "ready": indian_classifier.backend != "unloaded",
+            "enabled": settings.enable_indian_classification,
+            "classes": 24,
         },
         "nutrition": {
             "backend": "usda+ifct" if settings.usda_api_key else "ifct",
