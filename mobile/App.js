@@ -159,7 +159,12 @@ async function request(path, options = {}, token) {
   const isFormData = options.body instanceof FormData;
   const headers = { ...(isFormData ? {} : { "Content-Type": "application/json" }), ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  let response;
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  } catch (e) {
+    throw new Error("Cannot reach the server. Check your internet connection and make sure the backend is running.");
+  }
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const failure = new Error(detailText(payload, `Something went wrong (HTTP ${response.status}).`));
