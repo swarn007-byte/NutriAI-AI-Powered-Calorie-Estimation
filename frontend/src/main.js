@@ -2,8 +2,8 @@
  *
  * Pages are loaded with dynamic `import()` so the first paint only costs the
  * shell plus the landing page. There is no bundler, so this is a real network
- *  win rather than a bookkeeping exercise: ten page modules would otherwise be
- *  ten blocking requests before anything renders.
+ * win rather than a bookkeeping exercise: ten page modules would otherwise be
+ * ten blocking requests before anything renders.
  */
 
 import { el, mount } from "./dom.js";
