@@ -895,25 +895,34 @@ def analyze_scanned(
         clock = time.perf_counter()
         nutrients = nutrition.scale_nutrients(per_100g, weight_g)
 
-        # ---- CalorieCLIP override: replace calories with direct prediction ----
+        # ---- CalorieCLIP override: blend or replace calories with direct prediction ----
         calorieclip_calories = 0.0
         if calorieclip.backend == "calorieclip" and scanned.detection is not None:
             try:
                 crop = crop_box(scan.image, scanned.detection.bbox)
                 cc_result = calorieclip.predict(crop)
                 calorieclip_calories = cc_result["calories"]
-                if calorieclip_calories > 0 and nutrients.get("calories", 0) > 0:
-                    # Scale macros proportionally to match CalorieCLIP calories
-                    ratio = calorieclip_calories / nutrients["calories"]
-                    nutrients["calories"] = calorieclip_calories
-                    nutrients["protein_g"] = round(nutrients.get("protein_g", 0) * ratio, 1)
-                    nutrients["carbs_g"] = round(nutrients.get("carbs_g", 0) * ratio, 1)
-                    nutrients["fat_g"] = round(nutrients.get("fat_g", 0) * ratio, 1)
-                    # Recalculate kcal from macros as sanity check
-                    macro_kcal = nutrients["protein_g"] * 4 + nutrients["carbs_g"] * 4 + nutrients["fat_g"] * 9
-                    if abs(macro_kcal - calorieclip_calories) > calorieclip_calories * 0.3:
-                        # Macros don't match — keep CalorieCLIP calories, mark source
-                        source = "calorieclip"
+                table_calories = nutrients.get("calories", 0.0)
+                if calorieclip_calories > 0 and table_calories > 0:
+                    ratio = calorieclip_calories / table_calories
+                    # 1) Known piece-weighted foods: trust the table (samosa, idli, etc.)
+                    if piece_weight is not None:
+                        calorieclip_calories = 0.0
+                    # 2) CalorieCLIP is way off (>2x or <0.5x): reject
+                    elif ratio > 2.0 or ratio < 0.5:
+                        log.debug(
+                            "CalorieCLIP rejected for %s: predicted %.0f vs table %.0f (ratio %.2f)",
+                            label, calorieclip_calories, table_calories, ratio,
+                        )
+                        calorieclip_calories = 0.0
+                    # 3) Within reasonable range: blend 70% table + 30% CalorieCLIP
+                    else:
+                        blended = table_calories * 0.7 + calorieclip_calories * 0.3
+                        nutrients["calories"] = round(blended, 1)
+                        nutrients["protein_g"] = round(nutrients.get("protein_g", 0) * (blended / table_calories), 1)
+                        nutrients["carbs_g"] = round(nutrients.get("carbs_g", 0) * (blended / table_calories), 1)
+                        nutrients["fat_g"] = round(nutrients.get("fat_g", 0) * (blended / table_calories), 1)
+                        source = "calorieclip+table"
             except Exception as exc:
                 log.debug("CalorieCLIP prediction failed for item %d (%s)", position, exc)
 

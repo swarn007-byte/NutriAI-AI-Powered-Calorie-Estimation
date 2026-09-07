@@ -1206,7 +1206,8 @@ function MacroRing({ size, ratio, protein, carbs, fat }) {
 
   return (
     <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
+      <Svg width={size} height={size} style={{ backgroundColor: "transparent" }}>
+        <Circle cx={size / 2} cy={size / 2} r={outer + stroke / 2} fill={C.mintSoft} />
         <Circle cx={size / 2} cy={size / 2} r={outer} stroke="rgba(255,255,255,0.62)" strokeWidth={stroke} fill="none" />
         <Circle
           cx={size / 2}
@@ -2711,7 +2712,7 @@ const styles = StyleSheet.create({
   sheetActions: { flexDirection: "row", gap: 12, marginTop: 6 },
   sheetBtn: { flex: 1, marginTop: 22 },
 
-  tabBar: { position: "absolute", bottom: 18 + BOTTOM_INSET, left: 18, right: 18, height: 72, borderRadius: 26, backgroundColor: C.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, overflow: "hidden", ...SHADOW },
+  tabBar: { position: "absolute", bottom: 18 + BOTTOM_INSET, left: 18, right: 18, height: 72, borderRadius: 26, backgroundColor: C.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, overflow: "hidden" },
   tabBtn: { flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
   tabLabel: { fontSize: 9.5, fontWeight: "700", color: C.muted },
   tabLabelOn: { color: C.ink },
@@ -2719,7 +2720,7 @@ const styles = StyleSheet.create({
   scanWrap: { marginHorizontal: 6, alignItems: "center", justifyContent: "center" },
   // A soft mint bloom under the primary action, wider than the button so it
   // reads as light spilling out rather than a second, larger button.
-  scanHalo: { position: "absolute", width: 70, height: 70, borderRadius: 35, backgroundColor: C.mintSoft, opacity: 0.9 },
+  scanHalo: { position: "absolute", width: 62, height: 62, borderRadius: 22, backgroundColor: C.mintSoft, opacity: 0.9 },
   scanBtn: { width: 62, height: 62, borderRadius: 22, backgroundColor: C.green, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
 
   analyzingWrap: { flex: 1, backgroundColor: C.bg },
