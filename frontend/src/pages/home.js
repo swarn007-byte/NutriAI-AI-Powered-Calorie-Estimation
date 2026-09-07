@@ -11,10 +11,11 @@
  * finally has the found items in front of them.
  */
 
-import { el, icon } from "../dom.js";
+import { el, icon, humanize } from "../dom.js";
 import { navigate } from "../router.js";
 import { setPending, peekPending, release } from "../pending.js";
-import { limit, state } from "../store.js";
+import { api } from "../api.js";
+import { ensureCatalog, limit, setMeal, setSession, state } from "../store.js";
 import { toastError } from "../toast.js";
 
 const SAMPLES = [
@@ -123,6 +124,8 @@ export default function home() {
   const previewHost = el("div", { class: "stack" });
 
   let chosen = null;
+  let manualMode = false;
+  let manualEntries = [{ label: "", weight: "" }];
 
   function choose(file) {
     const problem = reject(file);
@@ -157,6 +160,10 @@ export default function home() {
   /* ------------------------------------------------------------------ Paint */
 
   function paint() {
+    if (manualMode) {
+      previewHost.replaceChildren(manualForm());
+      return;
+    }
     if (!chosen) {
       previewHost.replaceChildren(dropzone, sampleStrip(choose));
       return;
@@ -263,6 +270,22 @@ export default function home() {
         icon("camera", { size: 17 }),
         el("span", { text: "Take photo" })
       )
+      el(
+        "button",
+        {
+          class: "btn btn--ghost",
+          onclick: (event) => {
+            event.stopPropagation();
+            manualMode = true;
+            ensureCatalog().then(paint).catch((error) => {
+              toastError(error?.message || "The food list couldn't be loaded.", { title: "Manual entry unavailable" });
+              paint();
+            });
+            paint();
+          },
+        },
+        el("span", { text: "Enter meal manually" })
+      )
     ),
     fileInput,
     cameraInput
@@ -278,6 +301,72 @@ export default function home() {
       fileInput.click();
     }
   });
+
+  function manualForm() {
+    const catalog = state.catalog?.items || state.catalog || [];
+    const rows = manualEntries.map((entry, index) => {
+      const select = el(
+        "select",
+        { class: "input", "aria-label": `Food ${index + 1}` },
+        el("option", { value: "", text: "Choose a food" }),
+        catalog.map((food) =>
+          el("option", {
+            value: food.label,
+            text: food.display_name || humanize(food.label),
+            selected: food.label === entry.label,
+          })
+        )
+      );
+      select.addEventListener("change", () => {
+        entry.label = select.value;
+      });
+      const weight = el("input", {
+        class: "input",
+        type: "number",
+        min: "1",
+        max: "3000",
+        step: "1",
+        inputmode: "decimal",
+        placeholder: "Weight in grams",
+        value: entry.weight,
+        "aria-label": `Weight for food ${index + 1} in grams`,
+      });
+      weight.addEventListener("input", () => {
+        entry.weight = weight.value;
+      });
+      return el("div", { class: "row row--tight" }, el("div", { style: { flex: "1 1 12rem" } }, select), el("div", { style: { flex: "0 1 10rem" } }, weight));
+    });
+
+    const message = el("p", { class: "small muted", text: catalog.length ? "Choose each food and enter its weight. You can add as many foods as you need." : "Loading the food list…" });
+    const submit = el("button", { class: "btn btn--primary btn--lg btn--block", disabled: !catalog.length }, icon("check", { size: 18 }), el("span", { text: "Save meal" }));
+    submit.addEventListener("click", async () => {
+      const items = manualEntries.map((entry) => ({ label: entry.label, weight_g: Number(entry.weight) }));
+      if (items.some((item) => !item.label || !Number.isFinite(item.weight_g) || item.weight_g <= 0)) {
+        toastError("Choose a food and enter a weight for every row.", { title: "Complete the meal" });
+        return;
+      }
+      submit.disabled = true;
+      try {
+        const result = await api.manualMeal({ items });
+        if (result.token) setSession({ token: result.token, user: result.user });
+        setMeal(result);
+        navigate("/results");
+      } catch (error) {
+        submit.disabled = false;
+        toastError(error?.message || "The meal couldn't be saved.", { title: "Not saved" });
+      }
+    });
+
+    return el(
+      "section",
+      { class: "card stack stack--sm" },
+      el("div", { class: "row row--between" }, el("div", {}, el("span", { class: "eyebrow", text: "No photo needed" }), el("h2", { class: "card__title", text: "Enter your meal" })), el("button", { class: "btn btn--ghost btn--sm", onclick: () => { manualMode = false; paint(); }, text: "Use a photo" })),
+      message,
+      el("div", { class: "stack stack--xs" }, rows),
+      el("button", { class: "btn btn--outline", onclick: () => { manualEntries.push({ label: "", weight: "" }); paint(); } }, icon("plus", { size: 16 }), el("span", { text: "Add another food" })),
+      submit
+    );
+  }
 
   /* dragenter/dragleave fire for every child element the cursor crosses, so a
    * naive pair of handlers makes the highlight flicker. Counting depth fixes

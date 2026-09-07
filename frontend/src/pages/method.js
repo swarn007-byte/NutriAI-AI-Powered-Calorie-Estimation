@@ -12,44 +12,46 @@ import { state } from "../store.js";
 export default function method() {
   const page = el("div", { class: "page stack stack--lg" });
   const health = state.health;
-  const limits = health?.limits || {};
 
   page.append(
     el(
       "div",
       { class: "stack stack--sm" },
-      el("span", { class: "eyebrow", text: "Transparency" }),
-      el("h1", { style: { fontSize: "var(--step-4)", maxWidth: "24ch" }, text: "How the estimate is made" }),
+      el("span", { class: "eyebrow", text: "Simple guide" }),
+      el("h1", { style: { fontSize: "var(--step-4)", maxWidth: "24ch" }, text: "How your meal is estimated" }),
       el("p", {
         class: "hero__lede",
         style: { maxWidth: "58ch" },
-        text: "One photo, five stages, and a measurement you can check. Nothing here is a look-up on the filename or a guess from the dish name — the weight comes out of the pixels, and where a prior is used instead, this page says which one.",
+        text: "We use your photo, the plate size, and the food names to estimate portions and nutrition. You can review and correct the result before saving it.",
       })
     ),
-
+    el(
+      "section",
+      { class: "stack stack--sm" },
+      ...[
+        ["1", "Add your meal", "Take or upload a photo, or enter foods and weights manually if you do not have a photo."],
+        ["2", "Check the foods", "Confirm the dish names and remove anything the photo got wrong."],
+        ["3", "Set the portion scale", "For a photo, tell us the plate or bowl width. This helps estimate grams."],
+        ["4", "See the nutrition", "We match each food to our nutrition catalogue and scale calories, macros, and micronutrients to the portion."],
+      ].map(([number, title, text]) =>
+        el(
+          "article",
+          { class: "card stack stack--xs" },
+          el("div", { class: "row row--tight" }, el("span", { class: "stage__mark", text: number }), el("h2", { class: "card__title", text: title })),
+          el("p", { class: "small muted", text })
+        )
+      )
+    ),
     el(
       "div",
       { class: "panel panel--info" },
-      el(
-        "div",
-        { class: "row row--tight", style: { marginBottom: "0.35rem" } },
-        icon("info", { size: 16 }),
-        el("strong", { text: "The short version" })
-      ),
-      el("p", {
-        class: "small muted",
-        text: "The plate's width sets the scale. The item's outline gives its footprint in cm². A depth field gives the shape of the mound, and a per-category depth prior gives its height. Footprint × height is volume; volume × density is grams; grams × per-100 g nutrition is the number you see.",
-      })
+      icon("info", { size: 16 }),
+      el("p", { class: "small muted", text: "Photo estimates are approximate. A clear photo, the whole plate in frame, and the real plate width give the best result. Manual entries use the weight you provide." })
     ),
-
-    stagesCard(),
-    formulaCard(),
-    scaleCard(),
-    boundsCard(),
-    accuracyCard(),
-    engineCard(health),
-    limitsCard(limits),
-    sourcesCard()
+    health
+      ? el("p", { class: "xsmall faint", text: health.engine === "full" ? "Trained models are available for this installation." : "This installation uses the built-in estimator; treat photo labels as a starting point." })
+      : null,
+    el("a", { href: "/", class: "btn btn--primary", style: { alignSelf: "flex-start" } }, icon("camera", { size: 16 }), el("span", { text: "Analyse a meal" }))
   );
 
   return page;

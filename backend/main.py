@@ -736,6 +736,67 @@ def analyze_draft(
     return JSONResponse(body_out)
 
 
+@app.post("/api/meals/manual", response_model=schemas.MealOut, tags=["meals"])
+def create_manual_meal(
+    body: schemas.ManualMealRequest,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> Any:
+    """Create a meal from food names and weights when no photo is available."""
+    items: list[pipeline.AnalyzedItem] = []
+    for position, entry in enumerate(body.items):
+        label = entry.label.strip().lower().replace(" ", "_")
+        nutrients, source = pipeline.recompute_item(label, float(entry.weight_g), session)
+        density = nutrition.density_for(label)
+        items.append(
+            pipeline.AnalyzedItem(
+                detected_label="manual",
+                classified_label=label,
+                display_name=nutrition.display_name(label),
+                confidence=1.0,
+                low_confidence=False,
+                unrecognized=False,
+                estimated_weight_g=float(entry.weight_g),
+                estimated_volume_ml=round(float(entry.weight_g) / max(density, 0.05), 1),
+                weight_estimated=False,
+                nutrients=nutrients,
+                nutrition_source=source,
+                bbox={},
+                alternatives=[],
+                geometry={
+                    "area_cm2": 0.0,
+                    "mean_height_cm": 0.0,
+                    "peak_height_cm": 0.0,
+                    "density_g_per_ml": round(density, 3),
+                    "method": "manual-entry",
+                    "position": position,
+                },
+            )
+        )
+
+    meal_id = new_id()
+    meal = Meal(
+        id=meal_id,
+        user_id=user.id,
+        image_url=None,
+        captured_at=utcnow(),
+        engine="manual",
+        model_versions={"source": "manual-entry"},
+        notes=(body.notes or "").strip() or None,
+    )
+    session.add(meal)
+    _persist_items(session, meal_id, items)
+    session.flush()
+    session.refresh(meal)
+    _recalculate_meal(meal)
+    session.flush()
+
+    body_out = _meal_out(meal).model_dump(mode="json")
+    body_out["token"] = create_token(user.id, is_guest=bool(user.is_guest))
+    body_out["user"] = _user_out(user).model_dump(mode="json")
+    return JSONResponse(body_out)
+
+
 @app.get("/api/meals/{meal_id}", response_model=schemas.MealOut, tags=["meals"])
 def read_meal(
     meal_id: str,

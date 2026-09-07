@@ -173,6 +173,8 @@ export const api = {
       signal,
     }),
 
+  manualMeal: (payload) => json("/meals/manual", "POST", payload),
+
   meal: (id) => request(`/meals/${encodeURIComponent(id)}`),
 
   deleteMeal: (id) => request(`/meals/${encodeURIComponent(id)}`, { method: "DELETE" }),

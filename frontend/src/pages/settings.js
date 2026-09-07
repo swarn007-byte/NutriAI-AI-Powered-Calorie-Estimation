@@ -87,7 +87,6 @@ export default function settings() {
     goalsCard(save),
     scaleCard(save),
     appearanceCard(),
-    instanceCard(),
     sessionCard()
   );
 
@@ -404,86 +403,6 @@ function appearanceCard() {
       ),
       el("div", { class: "settings-row__control" }, group)
     )
-  );
-}
-
-/* ----------------------------------------------------------------- Instance */
-
-const MODEL_LABELS = {
-  detection: "Detection",
-  depth: "Depth",
-  classification: "Classification",
-  nutrition: "Nutrition",
-};
-
-/** What is actually running. Without trained weights the pipeline falls back to
- *  classical CV, and a user comparing two numbers deserves to know which engine
- *  produced them. */
-function instanceCard() {
-  const health = state.health;
-  if (!health) return null;
-
-  const full = health.engine === "full";
-
-  return el(
-    "section",
-    { class: "card stack stack--sm" },
-    el(
-      "div",
-      { class: "card__head" },
-      el("h2", { class: "card__title", text: "This instance" }),
-      el("span", {
-        class: full ? "chip chip--brand" : "chip chip--warn",
-        text: full ? "Trained weights" : "Built-in estimator",
-      })
-    ),
-    el(
-      "div",
-      { class: "table-wrap" },
-      el(
-        "table",
-        { class: "table" },
-        el(
-          "thead",
-          {},
-          el(
-            "tr",
-            {},
-            el("th", { text: "Stage" }),
-            el("th", { text: "Backend" }),
-            el("th", { text: "Version" })
-          )
-        ),
-        el(
-          "tbody",
-          {},
-          Object.entries(health.models || {}).map(([key, info]) =>
-            el(
-              "tr",
-              {},
-              el("td", { text: MODEL_LABELS[key] || key }),
-              el("td", {}, el("code", { class: "step__model", text: info.backend || "—" })),
-              el("td", { class: "faint", text: info.version || "—" })
-            )
-          )
-        )
-      )
-    ),
-    el(
-      "div",
-      { class: "row row--tight" },
-      el("span", { class: "chip", text: `v${health.version}` }),
-      el("span", { class: "chip", text: health.database }),
-      el("span", { class: "chip", text: `≤ ${Math.round((health.limits?.max_upload_bytes || 0) / 1048576)} MB uploads` }),
-      el("span", { class: "chip", text: `≤ ${health.limits?.max_items_per_plate ?? "—"} items` })
-    ),
-    full
-      ? null
-      : el("p", {
-          class: "xsmall faint",
-          text: "Trained checkpoints aren't installed, so detection, depth and classification use their geometric fallbacks. Labels are best treated as a starting point; the measurement maths is identical either way.",
-        }),
-    el("a", { class: "textlink", href: "/method", text: "How the estimate is made →" })
   );
 }
 

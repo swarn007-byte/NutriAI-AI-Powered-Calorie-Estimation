@@ -2,8 +2,8 @@
  *
  * Pages are loaded with dynamic `import()` so the first paint only costs the
  * shell plus the landing page. There is no bundler, so this is a real network
- * win rather than a bookkeeping exercise: nine page modules would otherwise be
- * nine blocking requests before anything renders.
+ *  win rather than a bookkeeping exercise: ten page modules would otherwise be
+ *  ten blocking requests before anything renders.
  */
 
 import { el, mount } from "./dom.js";
@@ -18,9 +18,12 @@ import { tooltips } from "./tooltip.js";
 applyTheme();
 tooltips();
 
+const app = document.getElementById("app");
+if (!app) throw new Error("[app] missing #app mount point");
+
 const outlet = el("main", { class: "main", id: "main", role: "main", tabindex: "-1" });
 
-mount(document.getElementById("app"), ...a11yLayer(), sidebar(), topbar(), outlet, tabbar());
+mount(app, ...a11yLayer(), sidebar(), topbar(), outlet, tabbar());
 
 /* ------------------------------------------------------------------ Routes */
 
@@ -35,6 +38,9 @@ mount(document.getElementById("app"), ...a11yLayer(), sidebar(), topbar(), outle
 const lazy = (importer) => async (context) => {
   try {
     const module = await importer();
+    if (typeof module.default !== "function") {
+      throw new TypeError("Page module must export a default function");
+    }
     return await module.default(context);
   } catch (error) {
     console.error("[app] page failed to load", error);
