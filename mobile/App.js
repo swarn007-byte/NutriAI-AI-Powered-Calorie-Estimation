@@ -17,6 +17,8 @@ import {
   Text,
   TextInput,
   View,
+  LayoutAnimation,
+  UIManager,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system/legacy";
@@ -24,6 +26,7 @@ import * as SecureStore from "expo-secure-store";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
+import { GestureHandlerRootView, Swipeable } from "react-native-gesture-handler";
 import Svg, {
   Circle,
   G,
@@ -246,6 +249,7 @@ export default function App() {
   const [correction, setCorrection] = useState(null);
   const [upgrading, setUpgrading] = useState(false);
   const [stage, setStage] = useState(null);
+  const [deletedItem, setDeletedItem] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
 
   const token = session?.token;
@@ -491,6 +495,55 @@ export default function App() {
     [correction, loadDashboardData, meal, token],
   );
 
+  const deleteItem = useCallback(
+    async (item) => {
+      if (!meal || !token) return;
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setMeal((prev) => ({
+        ...prev,
+        items: prev.items.filter((i) => i.id !== item.id),
+        totals: {
+          ...prev.totals,
+          calories: Math.max(0, (prev.totals.calories || 0) - (item.calories || 0)),
+          protein_g: Math.max(0, (prev.totals.protein_g || 0) - (item.protein_g || 0)),
+          carbs_g: Math.max(0, (prev.totals.carbs_g || 0) - (item.carbs_g || 0)),
+          fat_g: Math.max(0, (prev.totals.fat_g || 0) - (item.fat_g || 0)),
+        },
+      }));
+      setDeletedItem(item);
+      setTimeout(() => setDeletedItem(null), 4000);
+      try {
+        await request(
+          `/api/meals/${meal.meal_id}/items/${item.id}`,
+          { method: "DELETE" },
+          token,
+        );
+        await loadDashboardData(token);
+      } catch (reason) {
+        setError(reason.message);
+      }
+    },
+    [meal, token, loadDashboardData],
+  );
+
+  const undoDelete = useCallback(() => {
+    if (!deletedItem || !meal || !token) return;
+    setDeletedItem(null);
+    (async () => {
+      try {
+        const updated = await request(
+          `/api/meals/${meal.meal_id}/items/${deletedItem.id}`,
+          { method: "PATCH", body: JSON.stringify({ estimated_weight_g: deletedItem.estimated_weight_g }) },
+          token,
+        );
+        setMeal(updated);
+        await loadDashboardData(token);
+      } catch (reason) {
+        setError(reason.message);
+      }
+    })();
+  }, [deletedItem, meal, token, loadDashboardData]);
+
   const updateGoal = useCallback(
     async (calorieGoal) => {
       if (!token) return;
@@ -522,14 +575,18 @@ export default function App() {
     );
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.safe}>
+        <StatusBar style="dark" />
       {screen === "results" && meal ? (
         <ResultsScreen
           meal={meal}
           busy={busy}
           onBack={() => setScreen("home")}
           onCorrect={setCorrection}
+          onDelete={deleteItem}
+          deletedItem={deletedItem}
+          onUndoDelete={undoDelete}
         />
       ) : null}
       {screen === "home" ? (
@@ -635,7 +692,8 @@ export default function App() {
           </View>
         </View>
       ) : null}
-    </SafeAreaView>
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
@@ -2001,61 +2059,100 @@ function MacroPill({ label, value, tint }) {
   );
 }
 
-function ItemCard({ item, index, onCorrect, delay = 0 }) {
-  const [open, setOpen] = useState(false);
-  const low = item.low_confidence && !item.user_corrected;
-  const pieces = item.piece_count && item.piece_count > 1 ? `${item.piece_count} pieces  ·  ` : "";
+function SwipeableItemCard({ item, index, onCorrect, onDelete, delay = 0 }) {
+  const swipeableRef = useRef(null);
+
+  const renderRightActions = (progress, dragX) => {
+    const translateX = dragX.interpolate({
+      inputRange: [-100, -50, 0],
+      outputRange: [0, 10, 80],
+      extrapolate: "clamp",
+    });
+    const opacity = dragX.interpolate({
+      inputRange: [-100, -60, 0],
+      outputRange: [1, 0.8, 0],
+      extrapolate: "clamp",
+    });
+    return (
+      <Animated.View style={[styles.swipeDeleteBg, { transform: [{ translateX }], opacity }]}>
+        <Ionicons name="trash-outline" size={20} color="#FFF" />
+        <Text style={styles.swipeDeleteText}>Delete</Text>
+      </Animated.View>
+    );
+  };
+
   return (
     <Rise delay={delay} distance={10}>
-      <PressCard style={[styles.itemCard, low && styles.itemLow]} onPress={() => setOpen(!open)}>
-        <Sheen radius={20} />
-        <View style={styles.itemCardInner}>
-          <View style={[styles.itemIndex, low && styles.itemIndexLow]}>
-            <Text style={styles.itemIndexText}>{index + 1}</Text>
-          </View>
-          <View style={styles.itemMain}>
-            <View style={styles.itemNameRow}>
-              <Text style={styles.itemName} numberOfLines={1}>{item.display_name}</Text>
-              {item.user_corrected ? (
-                <View style={styles.fixedTag}>
-                  <Ionicons name="checkmark" size={11} color={C.greenDeep} />
-                  <Text style={styles.fixedTagText}>Fixed</Text>
-                </View>
-              ) : low ? (
-                <Pressable style={styles.unsure} onPress={() => onCorrect && onCorrect(item)} hitSlop={6}>
-                  <Text style={styles.unsureText}>Fix</Text>
-                </Pressable>
-              ) : null}
-            </View>
-            <Text style={styles.itemMeta} numberOfLines={1}>
-              {`${pieces}${formatGrams(item.estimated_weight_g)}  ·  P ${formatGrams(item.protein_g)}  C ${formatGrams(item.carbs_g)}  F ${formatGrams(item.fat_g)}`}
-            </Text>
-            {open ? (
-              <View style={styles.itemDetail}>
-                <Text style={styles.detailLabel}>CONFIDENCE</Text>
-                <Text style={styles.detailValue}>{`${Math.round((Number(item.confidence) || 0) * 100)}% on this label`}</Text>
-                <Text style={[styles.detailLabel, { marginTop: 10 }]}>PORTION METHOD</Text>
-                <Text style={styles.detailValue}>{item.geometry?.method || item.nutrition_source || "Estimated from the photo"}</Text>
-                {onCorrect ? (
-                  <Pressable style={styles.inlineFix} onPress={() => onCorrect(item)}>
-                    <Ionicons name="create-outline" size={15} color={C.greenDeep} />
-                    <Text style={styles.inlineFixText}>Adjust this item</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-            ) : null}
-          </View>
-          <View style={styles.itemEnergy}>
-            <Text style={styles.itemKcal}>{formatKcal(item.calories)}</Text>
-            <Text style={styles.itemUnit}>Kcal</Text>
-          </View>
-        </View>
-      </PressCard>
+      <Swipeable
+        ref={swipeableRef}
+        renderRightActions={renderRightActions}
+        onSwipeableOpen={() => {
+          onDelete && onDelete(item);
+          swipeableRef.current?.close();
+        }}
+        rightThreshold={80}
+        friction={2}
+        overshootRight={false}
+      >
+        <ItemCardInner item={item} index={index} onCorrect={onCorrect} />
+      </Swipeable>
     </Rise>
   );
 }
 
-function ResultsScreen({ meal, busy, onBack, onCorrect }) {
+function ItemCardInner({ item, index, onCorrect }) {
+  const [open, setOpen] = useState(false);
+  const low = item.low_confidence && !item.user_corrected;
+  const pieces = item.piece_count && item.piece_count > 1 ? `${item.piece_count} pieces  ·  ` : "";
+  return (
+    <PressCard style={[styles.itemCard, low && styles.itemLow]} onPress={() => setOpen(!open)}>
+      <Sheen radius={20} />
+      <View style={styles.itemCardInner}>
+        <View style={[styles.itemIndex, low && styles.itemIndexLow]}>
+          <Text style={styles.itemIndexText}>{index + 1}</Text>
+        </View>
+        <View style={styles.itemMain}>
+          <View style={styles.itemNameRow}>
+            <Text style={styles.itemName} numberOfLines={1}>{item.display_name}</Text>
+            {item.user_corrected ? (
+              <View style={styles.fixedTag}>
+                <Ionicons name="checkmark" size={11} color={C.greenDeep} />
+                <Text style={styles.fixedTagText}>Fixed</Text>
+              </View>
+            ) : low ? (
+              <Pressable style={styles.unsure} onPress={() => onCorrect && onCorrect(item)} hitSlop={6}>
+                <Text style={styles.unsureText}>Fix</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <Text style={styles.itemMeta} numberOfLines={1}>
+            {`${pieces}${formatGrams(item.estimated_weight_g)}  ·  P ${formatGrams(item.protein_g)}  C ${formatGrams(item.carbs_g)}  F ${formatGrams(item.fat_g)}`}
+          </Text>
+          {open ? (
+            <View style={styles.itemDetail}>
+              <Text style={styles.detailLabel}>CONFIDENCE</Text>
+              <Text style={styles.detailValue}>{`${Math.round((Number(item.confidence) || 0) * 100)}% on this label`}</Text>
+              <Text style={[styles.detailLabel, { marginTop: 10 }]}>PORTION METHOD</Text>
+              <Text style={styles.detailValue}>{item.geometry?.method || item.nutrition_source || "Estimated from the photo"}</Text>
+              {onCorrect ? (
+                <Pressable style={styles.inlineFix} onPress={() => onCorrect(item)}>
+                  <Ionicons name="create-outline" size={15} color={C.greenDeep} />
+                  <Text style={styles.inlineFixText}>Adjust this item</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.itemEnergy}>
+          <Text style={styles.itemKcal}>{formatKcal(item.calories)}</Text>
+          <Text style={styles.itemUnit}>Kcal</Text>
+        </View>
+      </View>
+    </PressCard>
+  );
+}
+
+function ResultsScreen({ meal, busy, onBack, onCorrect, onDelete, deletedItem, onUndoDelete }) {
   const image = imageUrl(meal.image_url || meal.thumb_url);
   const totals = meal.totals || {};
   const micros = Object.entries(meal.daily_values || {}).slice(0, 6);
@@ -2107,20 +2204,32 @@ function ResultsScreen({ meal, busy, onBack, onCorrect }) {
       ))}
 
       <View style={styles.sectionHead}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.sectionTitle}>Detected items</Text>
           <Text style={styles.sectionSub}>{`${(meal.items || []).length} on this plate`}</Text>
         </View>
+        <View style={styles.swipeHint}>
+          <Ionicons name="arrow-back" size={12} color={C.muted} />
+          <Text style={styles.swipeHintText}>Swipe to delete</Text>
+        </View>
       </View>
       {(meal.items || []).map((item, index) => (
-        <ItemCard
+        <SwipeableItemCard
           key={item.id || index}
           item={item}
           index={index}
           onCorrect={onCorrect}
+          onDelete={onDelete}
           delay={Math.min(300, index * 55)}
         />
       ))}
+
+      {(meal.items || []).length === 0 ? (
+        <View style={styles.emptyItems}>
+          <Ionicons name="restaurant-outline" size={36} color={C.faint} />
+          <Text style={styles.emptyItemsText}>No items on this plate</Text>
+        </View>
+      ) : null}
 
       {micros.length ? (
         <Rise style={styles.microCard}>
@@ -2146,6 +2255,16 @@ function ResultsScreen({ meal, busy, onBack, onCorrect }) {
           {`${meal.engine || "pipeline"}  ·  plate ${meal.plate_diameter_cm || 26} cm`}
         </Text>
       </View>
+
+      {deletedItem ? (
+        <View style={styles.undoToast}>
+          <Ionicons name="checkmark-circle" size={16} color={C.greenDeep} />
+          <Text style={styles.undoToastText}>{`${deletedItem.display_name || "Item"} removed`}</Text>
+          <Pressable onPress={onUndoDelete} hitSlop={8}>
+            <Text style={styles.undoToastBtn}>UNDO</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -2780,4 +2899,44 @@ const styles = StyleSheet.create({
   editItemInputWrap: { flexDirection: "row", alignItems: "center", backgroundColor: C.lineSoft, borderRadius: 10, paddingHorizontal: 10 },
   editItemInput: { flex: 1, fontSize: 14, fontWeight: "600", color: C.ink, paddingVertical: 8 },
   editItemSave: { width: 28, height: 28, borderRadius: 9, backgroundColor: C.green, alignItems: "center", justifyContent: "center", marginLeft: 6 },
+
+  swipeDeleteBg: {
+    backgroundColor: C.danger,
+    borderRadius: 16,
+    marginVertical: 5,
+    width: 80,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "column",
+    gap: 4,
+  },
+  swipeDeleteText: { fontSize: 11, fontWeight: "700", color: "#FFF" },
+  swipeHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: C.lineSoft,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  swipeHintText: { fontSize: 10, fontWeight: "600", color: C.muted },
+  undoToast: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: C.dark,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  undoToastText: { flex: 1, fontSize: 13, fontWeight: "600", color: "#FFF" },
+  undoToastBtn: { fontSize: 13, fontWeight: "800", color: C.mint, letterSpacing: 0.5 },
+  emptyItems: {
+    alignItems: "center",
+    paddingVertical: 32,
+    gap: 8,
+  },
+  emptyItemsText: { fontSize: 14, fontWeight: "600", color: C.muted },
 });

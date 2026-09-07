@@ -834,6 +834,28 @@ def correct_item(
     return _meal_out(meal)
 
 
+@app.delete("/api/meals/{meal_id}/items/{item_id}", response_model=schemas.MealOut, tags=["meals"])
+def delete_item(
+    meal_id: str,
+    item_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_session),
+) -> schemas.MealOut:
+    """Remove an item from a meal and recalculate totals."""
+    meal = get_meal(session, meal_id)
+    if meal is None or meal.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That meal doesn't exist.")
+    item = next((row for row in meal.items if row.id == item_id), None)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That item isn't part of this meal.")
+    session.delete(item)
+    session.flush()
+    session.refresh(meal)
+    _recalculate_meal(meal)
+    session.flush()
+    return _meal_out(meal)
+
+
 @app.patch("/api/meals/{meal_id}/plate", response_model=schemas.MealOut, tags=["meals"])
 def adjust_plate(
     meal_id: str,
