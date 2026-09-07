@@ -293,14 +293,4 @@ class AnalyzeDraftRequest(BaseModel):
     items: list[ItemEdit] = Field(default_factory=list)
 
 
-class ManualMealItem(BaseModel):
-    label: str = Field(min_length=1, max_length=120)
-    weight_g: float = Field(gt=0, le=3000)
-
-
-class ManualMealRequest(BaseModel):
-    items: list[ManualMealItem] = Field(min_length=1, max_length=60)
-    notes: str | None = Field(default=None, max_length=280)
-
-
 AuthPayload.model_rebuild()
