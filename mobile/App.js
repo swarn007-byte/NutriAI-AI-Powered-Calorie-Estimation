@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Easing,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -18,12 +19,19 @@ import {
   View,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { Camera, CameraView } from "expo-camera";
 import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
+import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import Svg, { Circle, G, Line, Rect, Text as SvgText } from "react-native-svg";
+import Svg, {
+  Circle,
+  G,
+  Line,
+  Polygon,
+  Rect,
+  Text as SvgText,
+} from "react-native-svg";
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 const TOKEN_KEY = "nutriai.mobile.token";
@@ -31,7 +39,7 @@ const USER_KEY = "nutriai.mobile.user";
 const ONBOARD_KEY = "nutriai.mobile.onboarded";
 
 const C = {
-  bg: "#F0F0EE",
+  bg: "#F2F4EF",
   card: "#FFFFFF",
   ink: "#111310",
   ink2: "#5F635A",
@@ -49,6 +57,19 @@ const C = {
   blue: "#4A9DF0",
   pink: "#EE6E9B",
   danger: "#D9534A",
+
+  // Ethereal layer. The app is mostly white cards on a near-white ground, which
+  // is clean but flat. These are the tints that give it depth: three aurora
+  // washes behind the content, two paler mints for gradient tops and the
+  // today-marker, and a translucent white pair for glass surfaces and the
+  // hairline highlight along the upper edge of a raised card.
+  aurora1: "#C6EE7C",
+  aurora2: "#9FD8E8",
+  aurora3: "#F4D9A0",
+  mintPale: "#E6F8B4",
+  mintLift: "#F4FCE2",
+  glass: "rgba(255,255,255,0.66)",
+  glassLine: "rgba(255,255,255,0.85)",
 };
 
 const SHADOW = Platform.select({
@@ -60,6 +81,15 @@ const SHADOW = Platform.select({
 const SHADOW_SOFT = Platform.select({
   ios: { shadowColor: "#1c1f18", shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   android: { elevation: 1 },
+  default: {},
+});
+
+// A tinted, wider shadow for the green surfaces. A neutral grey shadow under a
+// saturated mint card reads as dirt; casting it in the card's own hue instead
+// makes the surface look lit rather than smudged.
+const SHADOW_GLOW = Platform.select({
+  ios: { shadowColor: "#7BB32A", shadowOpacity: 0.32, shadowRadius: 22, shadowOffset: { width: 0, height: 12 } },
+  android: { elevation: 6 },
   default: {},
 });
 
@@ -135,28 +165,49 @@ async function request(path, options = {}, token) {
   return payload;
 }
 
-async function uploadMealImage(asset, token, plateDiameter) {
+async function uploadMealImage(asset, token, plateDiameter, location, retries = 2) {
   const info = await FileSystem.getInfoAsync(asset.uri, { size: true });
   if (!info.exists) throw new Error("That photo is no longer available on this device.");
-  const response = await FileSystem.uploadAsync(`${API_URL}/api/meals/analyze`, asset.uri, {
-    httpMethod: "POST",
-    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-    fieldName: "image",
-    mimeType: asset.mimeType || "image/jpeg",
-    parameters: { plate_diameter_cm: String(plateDiameter || 26) },
-    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
-  });
-  let payload = null;
-  try {
-    payload = JSON.parse(response.body);
-  } catch (reason) {
-    payload = null;
+  const params = { plate_diameter_cm: String(plateDiameter || 26) };
+  if (location) {
+    params.latitude = String(location.latitude);
+    params.longitude = String(location.longitude);
   }
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(detailText(payload, `Upload failed (HTTP ${response.status}).`));
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await FileSystem.uploadAsync(`${API_URL}/api/meals/analyze`, asset.uri, {
+        httpMethod: "POST",
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: "image",
+        mimeType: asset.mimeType || "image/jpeg",
+        parameters: params,
+        headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+      });
+      let payload = null;
+      try {
+        payload = JSON.parse(response.body);
+      } catch (reason) {
+        payload = null;
+      }
+      if (response.status < 200 || response.status >= 300) {
+        const err = new Error(detailText(payload, `Upload failed (HTTP ${response.status}).`));
+        err.status = response.status;
+        throw err;
+      }
+      if (!payload) throw new Error("The server sent back a response we could not read.");
+      return payload;
+    } catch (err) {
+      lastError = err;
+      // Don't retry on client errors (4xx) — only retry on network/server issues
+      if (err.status && err.status >= 400 && err.status < 500) throw err;
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
   }
-  if (!payload) throw new Error("The server sent back a response we could not read.");
-  return payload;
+  throw lastError;
 }
 
 async function persistSession(token, user) {
@@ -193,12 +244,30 @@ export default function App() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [correction, setCorrection] = useState(null);
-  const [cameraOpen, setCameraOpen] = useState(false);
   const [upgrading, setUpgrading] = useState(false);
+  const [stage, setStage] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
 
   const token = session?.token;
   const user = session?.user;
   const plateDiameter = user?.preferences?.plate_diameter_cm || 26;
+
+  // Get user location on mount (for regional food detection)
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+          if (loc?.coords) {
+            setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          }
+        }
+      } catch (e) {
+        // Location is optional — app works without it
+      }
+    })();
+  }, []);
 
   const loadDashboardData = useCallback(async (activeToken) => {
     const offset = -new Date().getTimezoneOffset();
@@ -307,32 +376,59 @@ export default function App() {
     async (asset) => {
       if (!asset || !token) return;
       setBusy(true);
+      setStage("detect");
       setError(null);
+      const timers = [];
       try {
-        const result = await uploadMealImage(asset, token, plateDiameter);
+        timers.push(setTimeout(() => setStage("classify"), 1500));
+        timers.push(setTimeout(() => setStage("portion"), 3000));
+        timers.push(setTimeout(() => setStage("nutrition"), 4500));
+        const result = await uploadMealImage(asset, token, plateDiameter, userLocation);
+        timers.push(setTimeout(() => setStage("done"), 0));
         setMeal(result);
         setScreen("results");
         await loadDashboardData(token);
       } catch (reason) {
         console.error("[analyse] upload failed:", reason);
-        setError(reason.message || "That meal could not be analysed.");
+        // Provide user-friendly error messages
+        let msg = reason.message || "That meal could not be analysed.";
+        if (msg.includes("Network request failed") || msg.includes("fetch")) {
+          msg = "Could not connect to the server. Please check your internet connection and try again.";
+        } else if (msg.includes("timeout") || msg.includes("Timeout")) {
+          msg = "The analysis is taking too long. Please try again with a clearer photo.";
+        } else if (msg.includes("HTTP 503")) {
+          msg = "The server is starting up. Please wait a moment and try again.";
+        } else if (msg.includes("HTTP 413")) {
+          msg = "The photo is too large. Please use a smaller image.";
+        } else if (msg.includes("HTTP 422")) {
+          msg = "No food detected in that photo. Try a clearer image of a plate of food.";
+        }
+        setError(msg);
       } finally {
+        timers.forEach(clearTimeout);
         setBusy(false);
+        setStage(null);
       }
     },
-    [loadDashboardData, plateDiameter, token],
+    [loadDashboardData, plateDiameter, token, userLocation],
   );
 
   const choosePhoto = useCallback(
     async (fromCamera) => {
       if (busy) return;
       if (fromCamera) {
-        const permission = await Camera.requestCameraPermissionsAsync();
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
           Alert.alert("Camera access needed", "Enable camera access for Nutri-AI in Settings to snap a plate.");
           return;
         }
-        setCameraOpen(true);
+        const picked = await ImagePicker.launchCameraAsync({
+          mediaTypes: ["images"],
+          quality: 0.85,
+          allowsMultipleSelection: false,
+        });
+        if (picked.canceled) return;
+        await analyse(picked.assets?.[0]);
         return;
       }
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -490,18 +586,52 @@ export default function App() {
       {screen === "results" ? null : (
         <BottomTabs active={screen} onNavigate={setScreen} onScan={() => choosePhoto(true)} busy={busy} />
       )}
-      <CameraCapture visible={cameraOpen} onClose={() => setCameraOpen(false)} onCapture={analyse} />
       <CorrectionModal
         item={correction}
         busy={busy}
         onClose={() => setCorrection(null)}
         onSave={saveCorrection}
       />
-      {busy && screen !== "results" ? (
-        <View style={styles.blocker} pointerEvents="none">
-          <View style={styles.blockerCard}>
-            <ActivityIndicator color={C.greenDeep} />
-            <Text style={styles.blockerText}>Working on it</Text>
+      {busy && !stage && screen !== "results" ? (
+        <View style={styles.stageOverlay}>
+          <Aurora height={500} />
+          <View style={styles.stageCard}>
+            <View style={styles.stageIconWrap}>
+              <ActivityIndicator size="large" color={C.greenDeep} />
+            </View>
+            <Text style={styles.stageTitle}>Analysing your plate</Text>
+            <Text style={styles.stageStep}>Detecting food items...</Text>
+            <View style={styles.stageBar}>
+              <View style={[styles.stageBarFill, { width: "30%" }]} />
+            </View>
+          </View>
+        </View>
+      ) : null}
+      {busy && stage ? (
+        <View style={styles.stageOverlay}>
+          <Aurora height={500} />
+          <View style={styles.stageCard}>
+            <View style={styles.stageIconWrap}>
+              <ActivityIndicator size="large" color={C.greenDeep} />
+            </View>
+            <Text style={styles.stageTitle}>Analysing your plate</Text>
+            {stage === "detect" && <Text style={styles.stageStep}>Detecting food items...</Text>}
+            {stage === "classify" && <Text style={styles.stageStep}>Identifying dishes with AI...</Text>}
+            {stage === "portion" && <Text style={styles.stageStep}>Estimating portion sizes...</Text>}
+            {stage === "nutrition" && <Text style={styles.stageStep}>Calculating nutrition values...</Text>}
+            {stage === "done" && <Text style={styles.stageStep}>Analysis complete!</Text>}
+            <View style={styles.stageBar}>
+              <View style={[styles.stageBarFill, {
+                width: stage === "detect" ? "20%" : stage === "classify" ? "45%" : stage === "portion" ? "70%" : stage === "nutrition" ? "90%" : "100%"
+              }]} />
+            </View>
+            <Text style={styles.stageHint}>
+              {stage === "detect" && "Scanning plate for food regions..."}
+              {stage === "classify" && "CLIP AI identifying each dish..."}
+              {stage === "portion" && "Measuring weights from depth..."}
+              {stage === "nutrition" && "Looking up nutritional data..."}
+              {stage === "done" && "Ready to show results"}
+            </Text>
           </View>
         </View>
       ) : null}
@@ -509,15 +639,74 @@ export default function App() {
   );
 }
 
+/** The atmosphere behind every screen.
+ *
+ *  Three offset radial washes — lime top-left, cool blue top-right, a warm amber
+ *  low and centre — over the near-white ground. Individually each is almost
+ *  invisible; together they are the reason the app reads as lit rather than as
+ *  white cards on grey, because a card's shadow now falls onto a colour and its
+ *  edge separates without needing a border. One non-interactive SVG per screen,
+ *  cheaper than a blur and with no native module. The radii are deliberately
+ *  wider than the frame so no edge of a wash is ever visible as a circle.
+ */
+
+function Aurora({ height = 520 }) {
+  return (
+    <View style={[styles.aurora, { height }]} pointerEvents="none">
+      <View style={[styles.auroraWash1]} />
+      <View style={[styles.auroraWash2]} />
+      <View style={[styles.auroraWash3]} />
+    </View>
+  );
+}
+
+/** A one-pixel light line along the top edge of a raised surface.
+ *
+ *  Physical objects catch light on the edge that faces it. Card surfaces here
+ *  are pure white on a light ground, so a white highlight would be invisible —
+ *  this is a translucent white that only reads where the card sits over one of
+ *  the aurora washes, which is exactly where the eye expects a lit edge.
+ */
+function Sheen({ radius = 20, inset = 1 }) {
+  return (
+    <View
+      style={[styles.sheen, { borderRadius: radius, top: inset, left: inset, right: inset }]}
+      pointerEvents="none"
+    />
+  );
+}
+
 function Splash() {
+  const glow = useRef(new Animated.Value(0)).current;
+
+  // A slow breath rather than a spinner. The boot path is usually under a
+  // second, and a pulsing mark reads as "starting" without implying a wait.
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, { toValue: 1, duration: 1100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(glow, { toValue: 0, duration: 1100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [glow]);
+
   return (
     <View style={styles.splash}>
       <StatusBar style="dark" />
+      <Aurora height={640} />
+      <Animated.View
+        style={[
+          styles.splashHalo,
+          { opacity: glow.interpolate({ inputRange: [0, 1], outputRange: [0.28, 0.6] }), transform: [{ scale: glow.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.08] }) }] },
+        ]}
+      />
       <View style={styles.splashMark}>
         <Ionicons name="leaf" size={30} color={C.onGreen} />
       </View>
       <Text style={styles.splashTitle}>Nutri-AI</Text>
-      <ActivityIndicator color={C.greenDeep} style={{ marginTop: 22 }} />
+      <Text style={styles.splashTag}>Reading your plate</Text>
     </View>
   );
 }
@@ -673,10 +862,13 @@ function Onboarding({ onDone }) {
   const Hero = slide.Hero;
   const last = index === SLIDES.length - 1;
 
+  // One driver for both the fade and the drift. 1 = settled; 0 = out. Leaving
+  // and arriving both use it, so a slide only ever moves in one direction —
+  // out to the left, in from the right.
   const go = (next) => {
-    Animated.timing(fade, { toValue: 0, duration: 130, useNativeDriver: true }).start(() => {
+    Animated.timing(fade, { toValue: 0, duration: 150, easing: Easing.in(Easing.quad), useNativeDriver: true }).start(() => {
       setIndex(next);
-      Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+      Animated.timing(fade, { toValue: 1, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
     });
   };
 
@@ -688,11 +880,20 @@ function Onboarding({ onDone }) {
   return (
     <SafeAreaView style={styles.onboard}>
       <StatusBar style="dark" />
+      <Aurora height={560} />
       <View style={styles.onboardTop}>
         <BrandMark />
         <Segments total={SLIDES.length} active={index} />
       </View>
-      <Animated.View style={[styles.onboardMain, { opacity: fade }]}>
+      <Animated.View
+        style={[
+          styles.onboardMain,
+          {
+            opacity: fade,
+            transform: [{ translateX: fade.interpolate({ inputRange: [0, 1], outputRange: [26, 0] }) }],
+          },
+        ]}
+      >
         <Text style={styles.onboardTitle}>{slide.top}</Text>
         <View style={styles.onboardTitleRow}>
           <Text style={styles.onboardTitle}>{slide.tail}</Text>
@@ -811,6 +1012,7 @@ function AuthScreen({ onAuthenticated, guestToken, onCancel }) {
   return (
     <SafeAreaView style={styles.authSafe}>
       <StatusBar style="dark" />
+      <Aurora height={520} />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.authScroll} keyboardShouldPersistTaps="handled">
           <View style={styles.authTop}>
@@ -821,20 +1023,22 @@ function AuthScreen({ onAuthenticated, guestToken, onCancel }) {
               </Pressable>
             ) : null}
           </View>
-          <Text style={styles.authTitle}>{signup ? "Create your" : "Welcome"}</Text>
-          <View style={styles.onboardTitleRow}>
-            <Text style={styles.authTitle}>{signup ? "account." : "back."}</Text>
-            <View style={styles.onboardBadge}>
-              <Ionicons name={signup ? "sparkles" : "hand-right"} size={19} color={C.onGreen} />
+          <Rise>
+            <Text style={styles.authTitle}>{signup ? "Create your" : "Welcome"}</Text>
+            <View style={styles.onboardTitleRow}>
+              <Text style={styles.authTitle}>{signup ? "account." : "back."}</Text>
+              <View style={styles.onboardBadge}>
+                <Ionicons name={signup ? "sparkles" : "hand-right"} size={19} color={C.onGreen} />
+              </View>
             </View>
-          </View>
-          <Text style={styles.authBody}>
-            {guestToken
-              ? "Add an email and password to keep the meals you already logged, on every device."
-              : signup
-                ? "Your plates, macros and streaks stay in sync wherever you sign in."
-                : "Sign in to pick up your streak right where you left it."}
-          </Text>
+            <Text style={styles.authBody}>
+              {guestToken
+                ? "Add an email and password to keep the meals you already logged, on every device."
+                : signup
+                  ? "Your plates, macros and streaks stay in sync wherever you sign in."
+                  : "Sign in to pick up your streak right where you left it."}
+            </Text>
+          </Rise>
 
           <View style={styles.toggle}>
             <Pressable style={[styles.toggleBtn, !signup && styles.toggleBtnOn]} onPress={() => { setMode("signin"); setFailure(null); }}>
@@ -943,32 +1147,6 @@ function Banner({ tone, text, onDismiss }) {
   );
 }
 
-function ProgressRing({ progress, size, stroke, color, track, children }) {
-  const radius = (size - stroke) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const dash = `${Math.max(0, Math.min(1, progress)) * circumference} ${circumference}`;
-  return (
-    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
-        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={track} strokeWidth={stroke} fill="none" />
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          stroke={color}
-          strokeWidth={stroke}
-          fill="none"
-          strokeLinecap="round"
-          strokeDasharray={dash}
-          rotation="-90"
-          origin={`${size / 2}, ${size / 2}`}
-        />
-      </Svg>
-      {children}
-    </View>
-  );
-}
-
 function TopBar({ user, onOpenCalendar, hasAlert }) {
   const hour = new Date().getHours();
   return (
@@ -993,9 +1171,92 @@ function TopBar({ user, onOpenCalendar, hasAlert }) {
   );
 }
 
+/** The gradient inside the mint hero card.
+ *
+ *  A flat mint fill at this size shows every compression artefact and reads as a
+ *  sticker. A diagonal wash from a paler mint plus a soft light source in the
+ *  top-left corner gives the card a direction, which is what makes the number
+/** Calorie progress and the macro split in one dial.
+ *
+ *  This replaces a plain ring that showed the same "% of goal" already printed
+ *  two lines to its left. The outer arc is still calorie progress; the inner
+ *  ring is the day's protein/carb/fat split by energy, so the dial answers "how
+ *  much" and "of what" in the space the old one used for "how much" twice.
+ *
+ *  Macros are converted to calories (4/4/9 per gram) before being split, since
+ *  a split by grams would make fat look far smaller than it eats.
+ */
+function MacroRing({ size, ratio, protein, carbs, fat }) {
+  const stroke = 11;
+  const outer = (size - stroke) / 2;
+  const inner = outer - stroke - 3;
+  const circumference = 2 * Math.PI * outer;
+  const innerCircumference = 2 * Math.PI * inner;
+  const clamped = Math.max(0, Math.min(1, ratio));
+
+  const energy = [
+    { value: protein * 4, color: C.greenDeep },
+    { value: carbs * 4, color: C.amber },
+    { value: fat * 9, color: C.blue },
+  ];
+  const total = energy.reduce((sum, part) => sum + part.value, 0);
+
+  // Track the running offset so each macro arc starts where the previous ended.
+  let sweep = 0;
+
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
+        <Circle cx={size / 2} cy={size / 2} r={outer} stroke="rgba(255,255,255,0.62)" strokeWidth={stroke} fill="none" />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={outer}
+          stroke={C.onGreen}
+          strokeWidth={stroke}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${clamped * circumference} ${circumference}`}
+          rotation="-90"
+          origin={`${size / 2}, ${size / 2}`}
+        />
+        {total > 0
+          ? energy.map((part, index) => {
+              const fraction = part.value / total;
+              const rotation = -90 + sweep * 360;
+              sweep += fraction;
+              // A 2° gap between segments; without it three arcs of similar
+              // lightness read as one continuous ring.
+              const length = Math.max(0, fraction - 0.006) * innerCircumference;
+              return (
+                <Circle
+                  key={index}
+                  cx={size / 2}
+                  cy={size / 2}
+                  r={inner}
+                  stroke={part.color}
+                  strokeWidth={5}
+                  fill="none"
+                  strokeDasharray={`${length} ${innerCircumference}`}
+                  rotation={String(rotation)}
+                  origin={`${size / 2}, ${size / 2}`}
+                />
+              );
+            })
+          : (
+            <Circle cx={size / 2} cy={size / 2} r={inner} stroke="rgba(255,255,255,0.5)" strokeWidth={5} fill="none" />
+          )}
+      </Svg>
+      <Text style={styles.ringValue}>{`${Math.round(clamped * 100)}%`}</Text>
+      <Text style={styles.ringLabel}>of goal</Text>
+    </View>
+  );
+}
+
 function StatCard({ icon, tint, label, value, unit, sub }) {
   return (
     <View style={styles.statCard}>
+      <Sheen radius={20} />
       <View style={[styles.statIcon, { backgroundColor: `${tint}1f` }]}>
         <Ionicons name={icon} size={16} color={tint} />
       </View>
@@ -1015,6 +1276,7 @@ function CalendarStrip({ offset, selected, onSelect, onShift, marks }) {
   const todayKey = dayKey(new Date());
   return (
     <View style={styles.calCard}>
+      <Sheen radius={22} />
       <View style={styles.calHead}>
         <Text style={styles.calMonth}>{label}</Text>
         <View style={styles.calNav}>
@@ -1044,7 +1306,7 @@ function CalendarStrip({ offset, selected, onSelect, onShift, marks }) {
               disabled={future}
             >
               <Text style={[styles.calDow, active && styles.calDowOn, future && { color: C.faint }]}>{DOW[index]}</Text>
-              <View style={[styles.calPill, active && styles.calPillOn]}>
+              <View style={[styles.calPill, active && styles.calPillOn, key === todayKey && !active && styles.calPillToday]}>
                 <Text style={[styles.calDate, active && styles.calDateOn, future && !active && { color: C.faint }]}>{day.getDate()}</Text>
               </View>
               <View style={[styles.calMark, marks.has(key) && styles.calMarkOn, key === todayKey && !marks.has(key) && styles.calMarkToday]} />
@@ -1056,49 +1318,121 @@ function CalendarStrip({ offset, selected, onSelect, onShift, marks }) {
   );
 }
 
+/** Fade-and-lift on mount, with an optional stagger.
+ *
+ *  Every screen here is a ScrollView of cards that previously appeared all at
+ *  once. Letting them arrive in reading order costs nothing at runtime — both
+ *  driven properties are native — and it makes a refresh feel like the content
+ *  settling into place rather than a repaint.
+ */
+function Rise({ delay = 0, distance = 14, children, style }) {
+  const value = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.timing(value, {
+      toValue: 1,
+      duration: 460,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [delay, value]);
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: value,
+          transform: [{ translateY: value.interpolate({ inputRange: [0, 1], outputRange: [distance, 0] }) }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+/** A card that presses in like a physical button.
+ *
+ *  `Pressable`'s opacity dip is fine for text links but reads as a flicker on a
+ *  large white card. A spring on scale gives weight, and springs back with a
+ *  little overshoot so the release is as legible as the press.
+ */
+function PressCard({ onPress, disabled, style, children }) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const spring = (toValue) =>
+    Animated.spring(scale, { toValue, friction: 7, tension: 180, useNativeDriver: true }).start();
+
+  return (
+    <Animated.View style={[style, { transform: [{ scale }] }]}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={() => spring(0.96)}
+        onPressOut={() => spring(1)}
+        disabled={disabled}
+        style={styles.fill}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 function ActionCard({ icon, title, sub, tint, onPress, busy }) {
   return (
-    <Pressable style={({ pressed }) => [styles.actionCard, pressed && styles.pressedSoft]} onPress={onPress} disabled={busy}>
+    <PressCard style={[styles.actionCard, busy && styles.btnDisabled]} onPress={onPress} disabled={busy}>
+      <Sheen radius={20} />
       <View style={[styles.actionIcon, { backgroundColor: tint }]}>
         <Ionicons name={icon} size={19} color={C.onGreen} />
       </View>
       <Text style={styles.actionTitle}>{busy ? "Analysing..." : title}</Text>
       <Text style={styles.actionSub} numberOfLines={1}>{sub}</Text>
-    </Pressable>
+    </PressCard>
   );
 }
 
-function MealRow({ entry, onPress }) {
+function MealRow({ entry, onPress, delay = 0 }) {
   const thumb = imageUrl(entry.thumb_url);
   const time = parseDate(entry.captured_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const name = entry.top_items?.length ? entry.top_items.map(titleCase).join(", ") : "Logged meal";
   return (
-    <Pressable style={({ pressed }) => [styles.mealRow, pressed && styles.pressedSoft]} onPress={() => onPress(entry)}>
-      {thumb ? (
-        <Image source={{ uri: thumb }} style={styles.mealThumb} />
-      ) : (
-        <View style={[styles.mealThumb, styles.mealThumbEmpty]}>
-          <Ionicons name="restaurant-outline" size={19} color={C.muted} />
+    <Rise delay={delay} distance={10}>
+      <PressCard style={styles.mealRow} onPress={() => onPress(entry)}>
+        <Sheen radius={20} />
+        <View style={styles.mealRowInner}>
+          {thumb ? (
+            <Image source={{ uri: thumb }} style={styles.mealThumb} />
+          ) : (
+            <View style={[styles.mealThumb, styles.mealThumbEmpty]}>
+              <Ionicons name="restaurant-outline" size={19} color={C.muted} />
+            </View>
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.mealName} numberOfLines={1}>{name}</Text>
+            <Text style={styles.mealMeta} numberOfLines={1}>
+              {`${time}  ·  ${entry.item_count} item${entry.item_count === 1 ? "" : "s"}  ·  ${formatGrams(entry.total_protein_g)} protein`}
+            </Text>
+          </View>
+          <View style={styles.mealKcalWrap}>
+            <Text style={styles.mealKcal}>{formatKcal(entry.total_calories)}</Text>
+            <Text style={styles.mealKcalUnit}>Kcal</Text>
+          </View>
         </View>
-      )}
-      <View style={{ flex: 1 }}>
-        <Text style={styles.mealName} numberOfLines={1}>{name}</Text>
-        <Text style={styles.mealMeta} numberOfLines={1}>
-          {`${time}  ·  ${entry.item_count} item${entry.item_count === 1 ? "" : "s"}  ·  ${formatGrams(entry.total_protein_g)} protein`}
-        </Text>
-      </View>
-      <View style={styles.mealKcalWrap}>
-        <Text style={styles.mealKcal}>{formatKcal(entry.total_calories)}</Text>
-        <Text style={styles.mealKcalUnit}>Kcal</Text>
-      </View>
-      {entry.has_low_confidence ? <View style={styles.mealFlag} /> : null}
-    </Pressable>
+        {entry.has_low_confidence ? <View style={styles.mealFlag} /> : null}
+      </PressCard>
+    </Rise>
   );
 }
 
 function EmptyState({ icon, title, body, action, onAction }) {
   return (
-    <View style={styles.empty}>
+    <Rise style={styles.empty}>
+      <Sheen radius={24} />
+      <View style={styles.emptyGlow} pointerEvents="none" />
       <View style={styles.emptyIcon}>
         <Ionicons name={icon} size={24} color={C.greenDeep} />
       </View>
@@ -1110,7 +1444,7 @@ function EmptyState({ icon, title, body, action, onAction }) {
           <Text style={styles.emptyBtnText}>{action}</Text>
         </Pressable>
       ) : null}
-    </View>
+    </Rise>
   );
 }
 
@@ -1155,11 +1489,15 @@ function HomeScreen({
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.greenDeep} />}
     >
+      <Aurora />
       <TopBar user={user} onOpenCalendar={onSeeAll} hasAlert={!!summary?.streak_days} />
       <Banner tone="danger" text={error} onDismiss={onDismissError} />
       <Banner tone="good" text={notice} onDismiss={onDismissNotice} />
 
-      <View style={styles.hero}>
+      <Rise style={styles.hero}>
+        <View style={styles.heroWashFallback} pointerEvents="none" />
+        <Sheen radius={28} />
+        <View style={styles.heroContent}>
         <View style={styles.heroTop}>
           <View style={styles.heroPill}>
             <View style={styles.heroPillDot} />
@@ -1169,7 +1507,7 @@ function HomeScreen({
         </View>
         <View style={styles.heroRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.heroLabel}>Your weekly progress</Text>
+            <Text style={styles.heroLabel}>{isToday ? "Eaten today" : "Your weekly progress"}</Text>
             <View style={styles.heroValueRow}>
               <Text style={styles.heroValue}>{formatKcal(eaten)}</Text>
               <Text style={styles.heroGoal}>{`/ ${formatKcal(calorieGoal)} Kcal`}</Text>
@@ -1181,14 +1519,18 @@ function HomeScreen({
               {`${summary?.streak_days || 0} day streak  ·  ${summary?.meals_logged || 0} meals logged`}
             </Text>
           </View>
-          <ProgressRing progress={ratio} size={92} stroke={11} color={C.greenDeep} track="rgba(255,255,255,0.62)">
-            <Text style={styles.ringValue}>{`${Math.round(ratio * 100)}%`}</Text>
-            <Text style={styles.ringLabel}>of goal</Text>
-          </ProgressRing>
+          <MacroRing
+            size={104}
+            ratio={ratio}
+            protein={Number(today.protein_g) || 0}
+            carbs={Number(today.carbs_g) || 0}
+            fat={Number(today.fat_g) || 0}
+          />
         </View>
-      </View>
+        </View>
+      </Rise>
 
-      <View style={styles.cardRow}>
+      <Rise delay={70} style={styles.cardRow}>
         <StatCard
           icon="flame"
           tint={C.amber}
@@ -1205,20 +1547,22 @@ function HomeScreen({
           unit="g"
           sub={`of ${formatGrams(goal.protein_g)}`}
         />
-      </View>
+      </Rise>
 
-      <CalendarStrip
-        offset={offset}
-        selected={selected}
-        marks={marks}
-        onSelect={setSelected}
-        onShift={(step) => setOffset((current) => Math.min(0, current + step))}
-      />
+      <Rise delay={130}>
+        <CalendarStrip
+          offset={offset}
+          selected={selected}
+          marks={marks}
+          onSelect={setSelected}
+          onShift={(step) => setOffset((current) => Math.min(0, current + step))}
+        />
+      </Rise>
 
-      <View style={styles.cardRow}>
+      <Rise delay={190} style={styles.cardRow}>
         <ActionCard icon="camera" title="Scan a plate" sub="Live camera" tint={C.mint} onPress={onScan} busy={busy} />
         <ActionCard icon="images-outline" title="From gallery" sub="Pick a photo" tint={C.mintSoft} onPress={onPick} busy={busy} />
-      </View>
+      </Rise>
 
       <View style={styles.sectionHead}>
         <View>
@@ -1233,7 +1577,9 @@ function HomeScreen({
       </View>
 
       {dayMeals.length ? (
-        dayMeals.map((entry) => <MealRow key={entry.meal_id} entry={entry} onPress={onOpenMeal} />)
+        dayMeals.map((entry, index) => (
+          <MealRow key={entry.meal_id} entry={entry} onPress={onOpenMeal} delay={index * 55} />
+        ))
       ) : (
         <EmptyState
           icon="camera-outline"
@@ -1261,12 +1607,53 @@ function Hatch({ radius = 11 }) {
   );
 }
 
+/* A bar that grows out of the axis on mount.
+ *
+ * scaleY rather than an animated `height`, so the whole thing stays on the
+ * native driver. Scale is applied about the element's centre, so the bar would
+ * also creep downwards; the translateY listed *before* it holds the bottom edge
+ * still. Order matters — transforms compose left to right, so translate-then-
+ * scale gives `s·p + t`, and t = (h/2)(1−s) is what pins the base. */
+function GrowBar({ height, radius, color, delay }) {
+  const grow = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const animation = Animated.timing(grow, {
+      toValue: 1,
+      duration: 620,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [delay, grow, height]);
+  return (
+    <Animated.View
+      style={[
+        styles.chartFill,
+        {
+          height,
+          borderRadius: radius,
+          backgroundColor: color,
+          opacity: grow,
+          transform: [
+            { translateY: grow.interpolate({ inputRange: [0, 1], outputRange: [height / 2, 0] }) },
+            { scaleY: grow },
+          ],
+        },
+      ]}
+    >
+      <View style={[styles.chartCap, { borderRadius: radius }]} pointerEvents="none" />
+    </Animated.View>
+  );
+}
+
 function BarChart({ buckets, goal, compact }) {
   const height = 148;
   const todayKey = dayKey(new Date());
   return (
     <View style={styles.chart}>
-      {buckets.map((bucket) => {
+      {buckets.map((bucket, index) => {
         const ratio = percent(bucket.calories, goal);
         const active = bucket.date === todayKey;
         const day = new Date(`${bucket.date}T12:00:00`);
@@ -1277,15 +1664,11 @@ function BarChart({ buckets, goal, compact }) {
             )}
             <View style={[styles.chartTrack, { height, width: compact ? 12 : 22, borderRadius: compact ? 6 : 11 }]}>
               <Hatch radius={compact ? 6 : 11} />
-              <View
-                style={[
-                  styles.chartFill,
-                  {
-                    height: Math.max(ratio > 0 ? 8 : 0, ratio * height),
-                    borderRadius: compact ? 6 : 11,
-                    backgroundColor: active ? C.greenDeep : C.green,
-                  },
-                ]}
+              <GrowBar
+                height={Math.max(ratio > 0 ? 8 : 0, ratio * height)}
+                radius={compact ? 6 : 11}
+                color={active ? C.greenDeep : C.green}
+                delay={index * 42}
               />
             </View>
             <Text style={[styles.chartDow, active && styles.chartDowOn]}>
@@ -1298,9 +1681,11 @@ function BarChart({ buckets, goal, compact }) {
   );
 }
 
-function MetricCard({ icon, tint, label, value, unit, ratio }) {
+function MetricCard({ icon, tint, label, value, unit, ratio, delay = 0 }) {
+  const filled = Math.round(percent(ratio, 1) * 100);
   return (
-    <View style={styles.metricCard}>
+    <Rise delay={delay} distance={12} style={styles.metricCard}>
+      <Sheen radius={20} />
       <View style={styles.metricHead}>
         <View style={[styles.metricIcon, { backgroundColor: `${tint}1f` }]}>
           <Ionicons name={icon} size={14} color={tint} />
@@ -1312,9 +1697,13 @@ function MetricCard({ icon, tint, label, value, unit, ratio }) {
         <Text style={styles.metricUnit}>{unit}</Text>
       </View>
       <View style={styles.metricTrack}>
-        <View style={[styles.metricFill, { width: `${Math.round(percent(ratio, 1) * 100)}%`, backgroundColor: tint }]} />
+        <View style={[styles.metricFill, { width: `${filled}%`, backgroundColor: tint }]}>
+          {/* The bar's own colour, lightened along the top half. Reads as a lit
+              edge without needing a second token per tint. */}
+          <View style={styles.metricGloss} pointerEvents="none" />
+        </View>
       </View>
-    </View>
+    </Rise>
   );
 }
 
@@ -1337,6 +1726,7 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.greenDeep} />}
     >
+      <Aurora height={420} />
       <View style={styles.pageHead}>
         <View>
           <Text style={styles.pageTitle}>Statistic</Text>
@@ -1354,7 +1744,8 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
 
       <Banner tone="danger" text={error} onDismiss={onDismissError} />
 
-      <View style={styles.chartCard}>
+      <Rise style={styles.chartCard}>
+        <Sheen radius={24} />
         <View style={styles.chartHead}>
           <View>
             <Text style={styles.chartLabel}>Calories</Text>
@@ -1387,7 +1778,7 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
           </View>
           <Text style={styles.legendAvg}>{`Avg ${formatKcal(average)} Kcal`}</Text>
         </View>
-      </View>
+      </Rise>
 
       <View style={styles.grid}>
         <MetricCard
@@ -1397,6 +1788,7 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
           value={formatKcal(today.protein_g)}
           unit={`/ ${formatKcal(goal.protein_g)} g`}
           ratio={percent(today.protein_g, goal.protein_g)}
+          delay={80}
         />
         <MetricCard
           icon="nutrition"
@@ -1405,6 +1797,7 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
           value={formatKcal(today.carbs_g)}
           unit={`/ ${formatKcal(goal.carbs_g)} g`}
           ratio={percent(today.carbs_g, goal.carbs_g)}
+          delay={130}
         />
         <MetricCard
           icon="water"
@@ -1413,6 +1806,7 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
           value={formatKcal(today.fat_g)}
           unit={`/ ${formatKcal(goal.fat_g)} g`}
           ratio={percent(today.fat_g, goal.fat_g)}
+          delay={180}
         />
         <MetricCard
           icon="flame"
@@ -1421,10 +1815,12 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
           value={`${summary?.streak_days || 0}`}
           unit="days"
           ratio={percent(summary?.streak_days || 0, 7)}
+          delay={230}
         />
       </View>
 
-      <View style={styles.infoCard}>
+      <Rise delay={280} style={styles.infoCard}>
+        <Sheen radius={22} />
         <View style={styles.infoRow}>
           <View style={[styles.metricIcon, { backgroundColor: C.mintSoft }]}>
             <Ionicons name="trophy-outline" size={14} color={C.greenDeep} />
@@ -1450,7 +1846,7 @@ function StatisticScreen({ summary, history, refreshing, error, onDismissError, 
           <Text style={styles.infoLabel}>Daily average</Text>
           <Text style={styles.infoValue}>{`${formatKcal(average)} Kcal`}</Text>
         </View>
-      </View>
+      </Rise>
     </ScrollView>
   );
 }
@@ -1474,6 +1870,7 @@ function MealsScreen({ history, refreshing, error, onDismissError, onRefresh, on
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.greenDeep} />}
     >
+      <Aurora height={420} />
       <View style={styles.pageHead}>
         <View>
           <Text style={styles.pageTitle}>Meals</Text>
@@ -1485,7 +1882,7 @@ function MealsScreen({ history, refreshing, error, onDismissError, onRefresh, on
       </View>
       <Banner tone="danger" text={error} onDismiss={onDismissError} />
       {groups.length ? (
-        groups.map(([key, entries]) => {
+        groups.map(([key, entries], groupIndex) => {
           const date = new Date(`${key}T12:00:00`);
           const total = entries.reduce((sum, entry) => sum + (Number(entry.total_calories) || 0), 0);
           return (
@@ -1496,8 +1893,15 @@ function MealsScreen({ history, refreshing, error, onDismissError, onRefresh, on
                 </Text>
                 <Text style={styles.groupTotal}>{`${formatKcal(total)} Kcal`}</Text>
               </View>
-              {entries.map((entry) => (
-                <MealRow key={entry.meal_id} entry={entry} onPress={onOpenMeal} />
+              {entries.map((entry, index) => (
+                <MealRow
+                  key={entry.meal_id}
+                  entry={entry}
+                  onPress={onOpenMeal}
+                  // Cap the stagger: a long history should not make the reader
+                  // wait seconds for the bottom of the list to arrive.
+                  delay={Math.min(360, groupIndex * 60 + index * 45)}
+                />
               ))}
             </View>
           );
@@ -1528,6 +1932,10 @@ function DetectedPhoto({ meal, image, onSelect }) {
           const y = Math.max(0, Math.min(height, Number(item.bbox.y || 0) * height));
           const w = Math.max(6, Math.min(width - x, Number(item.bbox.w || 0) * width));
           const h = Math.max(6, Math.min(height - y, Number(item.bbox.h || 0) * height));
+          const outline = Array.isArray(item.outline) ? item.outline : [];
+          const points = outline
+            .map((point) => `${Math.max(0, Math.min(1, Number(point?.[0]) || 0)) * width},${Math.max(0, Math.min(1, Number(point?.[1]) || 0)) * height}`)
+            .join(" ");
           const low = item.low_confidence && !item.user_corrected;
           const color = low ? C.amber : C.mint;
           const label = `${index + 1}. ${item.display_name}`;
@@ -1538,17 +1946,29 @@ function DetectedPhoto({ meal, image, onSelect }) {
           const labelY = y >= labelHeight + 7 ? y - labelHeight - 3 : Math.min(height - labelHeight - 4, y + h + 4);
           return (
             <G key={item.id || index}>
-              <Rect
-                x={x}
-                y={y}
-                width={w}
-                height={h}
-                fill={low ? "rgba(240,163,43,0.16)" : "rgba(216,241,135,0.20)"}
-                stroke={color}
-                strokeWidth={Math.max(3, width * 0.006)}
-                strokeDasharray={low ? "12,8" : undefined}
-                onPress={() => onSelect && onSelect(item)}
-              />
+              {outline.length >= 3 ? (
+                <Polygon
+                  points={points}
+                  fill={low ? "rgba(240,163,43,0.16)" : "rgba(216,241,135,0.20)"}
+                  stroke={color}
+                  strokeWidth={Math.max(3, width * 0.006)}
+                  strokeDasharray={low ? "12,8" : undefined}
+                  strokeLinejoin="round"
+                  onPress={() => onSelect && onSelect(item)}
+                />
+              ) : (
+                <Rect
+                  x={x}
+                  y={y}
+                  width={w}
+                  height={h}
+                  fill={low ? "rgba(240,163,43,0.16)" : "rgba(216,241,135,0.20)"}
+                  stroke={color}
+                  strokeWidth={Math.max(3, width * 0.006)}
+                  strokeDasharray={low ? "12,8" : undefined}
+                  onPress={() => onSelect && onSelect(item)}
+                />
+              )}
               <Rect
                 x={labelX}
                 y={labelY}
@@ -1580,52 +2000,57 @@ function MacroPill({ label, value, tint }) {
   );
 }
 
-function ItemCard({ item, index, onCorrect }) {
+function ItemCard({ item, index, onCorrect, delay = 0 }) {
   const [open, setOpen] = useState(false);
   const low = item.low_confidence && !item.user_corrected;
   const pieces = item.piece_count && item.piece_count > 1 ? `${item.piece_count} pieces  ·  ` : "";
   return (
-    <Pressable onPress={() => setOpen(!open)} style={({ pressed }) => [styles.itemCard, low && styles.itemLow, pressed && styles.pressedSoft]}>
-      <View style={[styles.itemIndex, low && styles.itemIndexLow]}>
-        <Text style={styles.itemIndexText}>{index + 1}</Text>
-      </View>
-      <View style={styles.itemMain}>
-        <View style={styles.itemNameRow}>
-          <Text style={styles.itemName} numberOfLines={1}>{item.display_name}</Text>
-          {item.user_corrected ? (
-            <View style={styles.fixedTag}>
-              <Ionicons name="checkmark" size={11} color={C.greenDeep} />
-              <Text style={styles.fixedTagText}>Fixed</Text>
+    <Rise delay={delay} distance={10}>
+      <PressCard style={[styles.itemCard, low && styles.itemLow]} onPress={() => setOpen(!open)}>
+        <Sheen radius={20} />
+        <View style={styles.itemCardInner}>
+          <View style={[styles.itemIndex, low && styles.itemIndexLow]}>
+            <Text style={styles.itemIndexText}>{index + 1}</Text>
+          </View>
+          <View style={styles.itemMain}>
+            <View style={styles.itemNameRow}>
+              <Text style={styles.itemName} numberOfLines={1}>{item.display_name}</Text>
+              {item.user_corrected ? (
+                <View style={styles.fixedTag}>
+                  <Ionicons name="checkmark" size={11} color={C.greenDeep} />
+                  <Text style={styles.fixedTagText}>Fixed</Text>
+                </View>
+              ) : low ? (
+                <Pressable style={styles.unsure} onPress={() => onCorrect && onCorrect(item)} hitSlop={6}>
+                  <Text style={styles.unsureText}>Fix</Text>
+                </Pressable>
+              ) : null}
             </View>
-          ) : low ? (
-            <Pressable style={styles.unsure} onPress={() => onCorrect && onCorrect(item)} hitSlop={6}>
-              <Text style={styles.unsureText}>Fix</Text>
-            </Pressable>
-          ) : null}
-        </View>
-        <Text style={styles.itemMeta} numberOfLines={1}>
-          {`${pieces}${formatGrams(item.estimated_weight_g)}  ·  P ${formatGrams(item.protein_g)}  C ${formatGrams(item.carbs_g)}  F ${formatGrams(item.fat_g)}`}
-        </Text>
-        {open ? (
-          <View style={styles.itemDetail}>
-            <Text style={styles.detailLabel}>CONFIDENCE</Text>
-            <Text style={styles.detailValue}>{`${Math.round((Number(item.confidence) || 0) * 100)}% on this label`}</Text>
-            <Text style={[styles.detailLabel, { marginTop: 10 }]}>PORTION METHOD</Text>
-            <Text style={styles.detailValue}>{item.geometry?.method || item.nutrition_source || "Estimated from the photo"}</Text>
-            {onCorrect ? (
-              <Pressable style={styles.inlineFix} onPress={() => onCorrect(item)}>
-                <Ionicons name="create-outline" size={15} color={C.greenDeep} />
-                <Text style={styles.inlineFixText}>Adjust this item</Text>
-              </Pressable>
+            <Text style={styles.itemMeta} numberOfLines={1}>
+              {`${pieces}${formatGrams(item.estimated_weight_g)}  ·  P ${formatGrams(item.protein_g)}  C ${formatGrams(item.carbs_g)}  F ${formatGrams(item.fat_g)}`}
+            </Text>
+            {open ? (
+              <View style={styles.itemDetail}>
+                <Text style={styles.detailLabel}>CONFIDENCE</Text>
+                <Text style={styles.detailValue}>{`${Math.round((Number(item.confidence) || 0) * 100)}% on this label`}</Text>
+                <Text style={[styles.detailLabel, { marginTop: 10 }]}>PORTION METHOD</Text>
+                <Text style={styles.detailValue}>{item.geometry?.method || item.nutrition_source || "Estimated from the photo"}</Text>
+                {onCorrect ? (
+                  <Pressable style={styles.inlineFix} onPress={() => onCorrect(item)}>
+                    <Ionicons name="create-outline" size={15} color={C.greenDeep} />
+                    <Text style={styles.inlineFixText}>Adjust this item</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ) : null}
           </View>
-        ) : null}
-      </View>
-      <View style={styles.itemEnergy}>
-        <Text style={styles.itemKcal}>{formatKcal(item.calories)}</Text>
-        <Text style={styles.itemUnit}>Kcal</Text>
-      </View>
-    </Pressable>
+          <View style={styles.itemEnergy}>
+            <Text style={styles.itemKcal}>{formatKcal(item.calories)}</Text>
+            <Text style={styles.itemUnit}>Kcal</Text>
+          </View>
+        </View>
+      </PressCard>
+    </Rise>
   );
 }
 
@@ -1650,7 +2075,9 @@ function ResultsScreen({ meal, busy, onBack, onCorrect }) {
 
       {image ? <DetectedPhoto meal={meal} image={image} onSelect={onCorrect} /> : null}
 
-      <View style={styles.totalsCard}>
+      <Rise style={styles.totalsCard}>
+        <View style={styles.heroWashFallback} pointerEvents="none" />
+        <Sheen radius={24} />
         <Text style={styles.totalsLabel}>Total energy</Text>
         <View style={styles.statValueRow}>
           <Text style={styles.totalsValue}>{formatKcal(totals.calories)}</Text>
@@ -1661,7 +2088,7 @@ function ResultsScreen({ meal, busy, onBack, onCorrect }) {
           <MacroPill label="Carbs" value={totals.carbs_g} tint={C.amber} />
           <MacroPill label="Fat" value={totals.fat_g} tint={C.blue} />
         </View>
-      </View>
+      </Rise>
 
       {meal.low_confidence ? (
         <View style={styles.warn}>
@@ -1685,22 +2112,31 @@ function ResultsScreen({ meal, busy, onBack, onCorrect }) {
         </View>
       </View>
       {(meal.items || []).map((item, index) => (
-        <ItemCard key={item.id || index} item={item} index={index} onCorrect={onCorrect} />
+        <ItemCard
+          key={item.id || index}
+          item={item}
+          index={index}
+          onCorrect={onCorrect}
+          delay={Math.min(300, index * 55)}
+        />
       ))}
 
       {micros.length ? (
-        <View style={styles.microCard}>
+        <Rise style={styles.microCard}>
+          <Sheen radius={22} />
           <Text style={styles.sectionTitle}>Daily values</Text>
           {micros.map(([key, value]) => (
             <View key={key} style={styles.microRow}>
               <Text style={styles.microLabel} numberOfLines={1}>{titleCase(key)}</Text>
               <View style={styles.microTrack}>
-                <View style={[styles.microFill, { width: `${Math.round(percent(value, 100) * 100)}%` }]} />
+                <View style={[styles.microFill, { width: `${Math.round(percent(value, 100) * 100)}%` }]}>
+                  <View style={styles.metricGloss} pointerEvents="none" />
+                </View>
               </View>
               <Text style={styles.microValue}>{`${Math.round(Number(value) || 0)}%`}</Text>
             </View>
           ))}
-        </View>
+        </Rise>
       ) : null}
 
       <View style={styles.engineRow}>
@@ -1737,6 +2173,7 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
   const goal = Math.round(Number(summary?.goal?.calories) || 2000);
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.screenPad} showsVerticalScrollIndicator={false}>
+      <Aurora height={420} />
       <View style={styles.pageHead}>
         <View>
           <Text style={styles.pageTitle}>Profile</Text>
@@ -1745,7 +2182,11 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
       </View>
       <Banner tone="danger" text={error} onDismiss={onDismissError} />
 
-      <View style={styles.profileCard}>
+      <Rise style={styles.profileCard}>
+        <Sheen radius={24} />
+        {/* The avatar sits in its own pool of light — this is the one screen
+            with no photograph on it, so the warmth has to come from somewhere. */}
+        <View style={styles.profileGlow} pointerEvents="none" />
         <View style={styles.profileAvatar}>
           <Text style={styles.profileAvatarText}>{initialOf(user)}</Text>
         </View>
@@ -1759,10 +2200,10 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
             <Text style={styles.profileCtaText}>Create an account</Text>
           </Pressable>
         ) : null}
-      </View>
+      </Rise>
 
       <Text style={styles.groupLabel}>Daily calorie goal</Text>
-      <View style={styles.goalRow}>
+      <Rise delay={80} style={styles.goalRow}>
         {GOAL_STEPS.map((step) => (
           <Pressable
             key={step}
@@ -1772,17 +2213,19 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
             <Text style={[styles.goalChipText, step === goal && styles.goalChipTextOn]}>{step}</Text>
           </Pressable>
         ))}
-      </View>
+      </Rise>
 
       <Text style={styles.groupLabel}>Account</Text>
-      <View style={styles.settingsCard}>
+      <Rise delay={130} style={styles.settingsCard}>
+        <Sheen radius={22} />
         <SettingRow icon="mail-outline" label="Email" value={user?.email || "Not set"} />
         <SettingRow icon="resize-outline" label="Plate size" value={`${user?.preferences?.plate_diameter_cm || 26} cm`} />
         <SettingRow icon="server-outline" label="Backend" value={API_URL.replace(/^https?:\/\//, "")} />
-      </View>
+      </Rise>
 
       <Text style={styles.groupLabel}>Session</Text>
-      <View style={styles.settingsCard}>
+      <Rise delay={180} style={styles.settingsCard}>
+        <Sheen radius={22} />
         <SettingRow
           icon="log-out-outline"
           label={user?.is_guest ? "End guest session" : "Sign out"}
@@ -1800,71 +2243,9 @@ function ProfileScreen({ user, summary, history, error, onDismissError, onSignOu
             )
           }
         />
-      </View>
+      </Rise>
       <Text style={styles.versionText}>Nutri-AI mobile</Text>
     </ScrollView>
-  );
-}
-
-function CameraCapture({ visible, onClose, onCapture }) {
-  const cameraRef = useRef(null);
-  const [ready, setReady] = useState(false);
-  const [shooting, setShooting] = useState(false);
-  const [facing, setFacing] = useState("back");
-
-  useEffect(() => {
-    if (!visible) {
-      setReady(false);
-      setShooting(false);
-    }
-  }, [visible]);
-
-  const shoot = async () => {
-    if (!cameraRef.current || shooting) return;
-    setShooting(true);
-    try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.6, skipProcessing: false });
-      onClose();
-      await onCapture(photo);
-    } catch (reason) {
-      console.error("[camera] capture failed:", reason);
-      Alert.alert("Camera trouble", reason.message || "That shot did not come through. Try again.");
-    } finally {
-      setShooting(false);
-    }
-  };
-
-  return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.camWrap}>
-        <StatusBar style="light" />
-        {visible ? (
-          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} onCameraReady={() => setReady(true)} />
-        ) : null}
-        <View style={styles.camTop}>
-          <Pressable style={styles.camRound} onPress={onClose} hitSlop={8}>
-            <Ionicons name="close" size={21} color={C.card} />
-          </Pressable>
-          <View style={styles.camHint}>
-            <Ionicons name="scan-outline" size={14} color={C.mint} />
-            <Text style={styles.camHintText}>Fill the frame with the plate</Text>
-          </View>
-          <Pressable style={styles.camRound} onPress={() => setFacing(facing === "back" ? "front" : "back")} hitSlop={8}>
-            <Ionicons name="camera-reverse-outline" size={21} color={C.card} />
-          </Pressable>
-        </View>
-        <View style={styles.camGuide} pointerEvents="none" />
-        <View style={styles.camBottom}>
-          <Text style={styles.camTip}>Shoot straight down, keep the whole plate visible.</Text>
-          <Pressable style={styles.shutter} onPress={shoot} disabled={!ready || shooting}>
-            <View style={[styles.shutterInner, (!ready || shooting) && { backgroundColor: C.muted }]}>
-              {shooting ? <ActivityIndicator color={C.onGreen} /> : <Ionicons name="camera" size={26} color={C.onGreen} />}
-            </View>
-          </Pressable>
-          <Text style={styles.camTip}>{ready ? "Ready" : "Warming up the camera..."}</Text>
-        </View>
-      </View>
-    </Modal>
   );
 }
 
@@ -1884,6 +2265,7 @@ function CorrectionModal({ item, busy, onClose, onSave }) {
       <View style={styles.sheetBackdrop}>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.sheet}>
+            <Aurora height={200} />
             <View style={styles.sheetGrip} />
             <Text style={styles.sheetTitle}>Fix this item</Text>
             <Text style={styles.sheetBody}>
@@ -1933,12 +2315,16 @@ const TABS = [
 function BottomTabs({ active, onNavigate, onScan, busy }) {
   return (
     <View style={styles.tabBar}>
+      <Sheen radius={26} />
       {TABS.slice(0, 2).map((tab) => (
         <TabButton key={tab.key} tab={tab} active={active === tab.key} onPress={() => onNavigate(tab.key)} />
       ))}
-      <Pressable style={({ pressed }) => [styles.scanBtn, pressed && styles.pressedSoft]} onPress={onScan} disabled={busy}>
-        {busy ? <ActivityIndicator color={C.onGreen} /> : <Ionicons name="scan" size={25} color={C.onGreen} />}
-      </Pressable>
+      <View style={styles.scanWrap}>
+        <View style={styles.scanHalo} pointerEvents="none" />
+        <Pressable style={({ pressed }) => [styles.scanBtn, pressed && styles.pressedSoft]} onPress={onScan} disabled={busy}>
+          {busy ? <ActivityIndicator color={C.onGreen} /> : <Ionicons name="scan" size={25} color={C.onGreen} />}
+        </Pressable>
+      </View>
       {TABS.slice(2).map((tab) => (
         <TabButton key={tab.key} tab={tab} active={active === tab.key} onPress={() => onNavigate(tab.key)} />
       ))}
@@ -1947,11 +2333,27 @@ function BottomTabs({ active, onNavigate, onScan, busy }) {
 }
 
 function TabButton({ tab, active, onPress }) {
+  // The indicator grows from nothing rather than appearing — with four tabs in a
+  // row, a hard cut reads as a flicker when you switch.
+  const width = useRef(new Animated.Value(active ? 1 : 0)).current;
+  useEffect(() => {
+    const animation = Animated.timing(width, {
+      toValue: active ? 1 : 0,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [active, width]);
   return (
     <Pressable style={styles.tabBtn} onPress={onPress} hitSlop={6}>
+      <Animated.View
+        style={[styles.tabDot, { opacity: width, transform: [{ scaleX: width }] }]}
+        pointerEvents="none"
+      />
       <Ionicons name={active ? tab.icon : `${tab.icon}-outline`} size={21} color={active ? C.ink : C.muted} />
       <Text style={[styles.tabLabel, active && styles.tabLabelOn]}>{tab.label}</Text>
-      {active ? <View style={styles.tabDot} /> : null}
     </Pressable>
   );
 }
@@ -1968,9 +2370,17 @@ const styles = StyleSheet.create({
   blockerCard: { backgroundColor: C.card, borderRadius: 20, paddingVertical: 20, paddingHorizontal: 26, alignItems: "center", gap: 10, ...SHADOW },
   blockerText: { color: C.ink2, fontSize: 13, fontWeight: "600" },
 
+  aurora: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 0, elevation: 0 },
+  auroraWash1: { position: "absolute", top: -40, left: -60, width: 300, height: 300, borderRadius: 150, backgroundColor: C.aurora1, opacity: 0.35 },
+  auroraWash2: { position: "absolute", top: -20, right: -40, width: 260, height: 260, borderRadius: 130, backgroundColor: C.aurora2, opacity: 0.25 },
+  auroraWash3: { position: "absolute", top: 160, left: 80, width: 280, height: 280, borderRadius: 140, backgroundColor: C.aurora3, opacity: 0.18 },
+  sheen: { position: "absolute", height: 1, backgroundColor: C.glassLine, opacity: 0.9, zIndex: 1 },
+
   splash: { flex: 1, backgroundColor: C.bg, alignItems: "center", justifyContent: "center" },
-  splashMark: { width: 62, height: 62, borderRadius: 20, backgroundColor: C.mint, alignItems: "center", justifyContent: "center" },
+  splashHalo: { position: "absolute", width: 250, height: 250, borderRadius: 125, backgroundColor: C.mint, marginBottom: 48 },
+  splashMark: { width: 62, height: 62, borderRadius: 20, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
   splashTitle: { marginTop: 16, fontSize: 22, fontWeight: "800", color: C.ink, letterSpacing: -0.4 },
+  splashTag: { marginTop: 5, fontSize: 12, fontWeight: "600", color: C.ink2, letterSpacing: 0.2 },
 
   brandRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   brandChip: { width: 28, height: 28, borderRadius: 9, backgroundColor: C.mint, alignItems: "center", justifyContent: "center" },
@@ -1986,7 +2396,7 @@ const styles = StyleSheet.create({
   onboardMain: { flex: 1, paddingTop: 18 },
   onboardTitle: { fontSize: 34, lineHeight: 39, fontWeight: "800", color: C.ink, letterSpacing: -1.1 },
   onboardTitleRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  onboardBadge: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.green, alignItems: "center", justifyContent: "center" },
+  onboardBadge: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.green, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
   onboardBody: { marginTop: 12, fontSize: 14, lineHeight: 21, color: C.ink2, maxWidth: 320 },
   onboardHero: { flex: 1, alignItems: "center", justifyContent: "center", marginTop: 4 },
   onboardFoot: { paddingBottom: 16 + BOTTOM_INSET, alignItems: "center", gap: 12 },
@@ -1994,7 +2404,7 @@ const styles = StyleSheet.create({
   onboardSkip: { fontSize: 13, fontWeight: "600", color: C.ink2 },
 
   startPill: { alignSelf: "stretch", height: 66, borderRadius: 33, backgroundColor: C.card, flexDirection: "row", alignItems: "center", paddingLeft: 8, paddingRight: 16, ...SHADOW },
-  startCircle: { width: 50, height: 50, borderRadius: 25, backgroundColor: C.green, alignItems: "center", justifyContent: "center", flexDirection: "row" },
+  startCircle: { width: 50, height: 50, borderRadius: 25, backgroundColor: C.green, alignItems: "center", justifyContent: "center", flexDirection: "row", ...SHADOW_GLOW },
   startText: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "800", color: C.ink, letterSpacing: -0.4 },
   startCheck: { width: 30, height: 30, borderRadius: 15, backgroundColor: C.dark, alignItems: "center", justifyContent: "center" },
 
@@ -2002,7 +2412,7 @@ const styles = StyleSheet.create({
   heroCenter: { position: "absolute", left: 0, right: 0, top: 120, alignItems: "center" },
   heroCenterValue: { fontSize: 34, fontWeight: "800", color: C.ink, letterSpacing: -1 },
   heroCenterLabel: { fontSize: 11, fontWeight: "700", color: C.muted, letterSpacing: 0.6 },
-  heroChip: { position: "absolute", backgroundColor: C.card, borderRadius: 14, paddingVertical: 7, paddingHorizontal: 12, ...SHADOW_SOFT },
+  heroChip: { position: "absolute", backgroundColor: C.glass, borderRadius: 14, paddingVertical: 7, paddingHorizontal: 12, borderWidth: 1, borderColor: C.glassLine, ...SHADOW_SOFT },
   heroChipValue: { fontSize: 13, fontWeight: "800", color: C.ink, letterSpacing: -0.3 },
   heroChipLabel: { fontSize: 10, fontWeight: "600", color: C.muted, marginTop: 1 },
 
@@ -2020,13 +2430,13 @@ const styles = StyleSheet.create({
 
   fieldWrap: { marginTop: 14 },
   fieldLabel: { fontSize: 11.5, fontWeight: "700", color: C.ink2, marginBottom: 7, letterSpacing: 0.2 },
-  field: { flexDirection: "row", alignItems: "center", gap: 10, height: 54, borderRadius: 17, backgroundColor: C.card, borderWidth: 1, borderColor: C.line, paddingHorizontal: 15 },
+  field: { flexDirection: "row", alignItems: "center", gap: 10, height: 54, borderRadius: 17, backgroundColor: C.glass, borderWidth: 1, borderColor: C.line, paddingHorizontal: 15 },
   fieldInput: { flex: 1, fontSize: 15, color: C.ink, padding: 0 },
 
   authError: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 16, backgroundColor: "rgba(217,83,74,0.09)", borderRadius: 14, padding: 12 },
   authErrorText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: C.danger, fontWeight: "600" },
 
-  primaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 56, borderRadius: 18, backgroundColor: C.green, marginTop: 22, ...SHADOW_SOFT },
+  primaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 56, borderRadius: 18, backgroundColor: C.green, marginTop: 22, ...SHADOW_GLOW },
   primaryBtnText: { fontSize: 15.5, fontWeight: "800", color: C.onGreen, letterSpacing: -0.2 },
   ghostBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 56, borderRadius: 18, backgroundColor: C.card, borderWidth: 1, borderColor: C.line },
   ghostBtnText: { fontSize: 14.5, fontWeight: "700", color: C.ink },
@@ -2050,18 +2460,21 @@ const styles = StyleSheet.create({
   roundBtnGreen: { width: 44, height: 44, borderRadius: 15, backgroundColor: C.green, alignItems: "center", justifyContent: "center", ...SHADOW_SOFT },
   dot: { position: "absolute", top: 9, right: 10, width: 7, height: 7, borderRadius: 4, backgroundColor: C.green, borderWidth: 1.5, borderColor: C.card },
 
-  hero: { backgroundColor: C.mint, borderRadius: 26, padding: 18, ...SHADOW },
-  heroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
+  hero: { backgroundColor: C.mint, borderRadius: 28, padding: 18, overflow: "hidden", ...SHADOW_GLOW },
+  heroContent: { zIndex: 3, elevation: 3 },
+  heroWash: { ...StyleSheet.absoluteFillObject, zIndex: 0, elevation: 0 },
+  heroWashFallback: { ...StyleSheet.absoluteFillObject, backgroundColor: C.mintPale, opacity: 0.5 },
+  heroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14, zIndex: 2, elevation: 2 },
   heroPill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(255,255,255,0.75)", borderRadius: 12, paddingVertical: 5, paddingHorizontal: 10 },
   heroPillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.greenDeep },
   heroPillText: { fontSize: 11.5, fontWeight: "700", color: C.onGreen },
   heroDate: { fontSize: 12, fontWeight: "700", color: C.greenDeep },
-  heroRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  heroRow: { flexDirection: "row", alignItems: "center", gap: 14, zIndex: 2, elevation: 2 },
   heroLabel: { fontSize: 13, fontWeight: "700", color: C.greenDeep },
   heroValueRow: { flexDirection: "row", alignItems: "flex-end", gap: 6, marginTop: 4 },
   heroValue: { fontSize: 36, fontWeight: "800", color: C.onGreen, letterSpacing: -1.4, lineHeight: 40 },
   heroGoal: { fontSize: 12.5, fontWeight: "700", color: C.greenDeep, paddingBottom: 5 },
-  heroTrack: { height: 7, borderRadius: 4, backgroundColor: "rgba(255,255,255,0.66)", marginTop: 10, overflow: "hidden" },
+  heroTrack: { height: 7, borderRadius: 4, backgroundColor: C.glass, marginTop: 10, overflow: "hidden" },
   heroFill: { height: 7, borderRadius: 4, backgroundColor: C.greenDeep },
   heroFoot: { fontSize: 11.5, fontWeight: "600", color: C.greenDeep, marginTop: 9 },
   ringValue: { fontSize: 17, fontWeight: "800", color: C.onGreen, letterSpacing: -0.5 },
@@ -2076,7 +2489,7 @@ const styles = StyleSheet.create({
   statCardUnit: { fontSize: 11.5, fontWeight: "700", color: C.muted, paddingBottom: 4 },
   statCardSub: { fontSize: 11, color: C.faint, fontWeight: "600", marginTop: 3 },
 
-  calCard: { backgroundColor: C.card, borderRadius: 22, padding: 15, marginTop: 14, ...SHADOW_SOFT },
+  calCard: { backgroundColor: C.card, borderRadius: 22, padding: 15, marginTop: 14, overflow: "hidden", ...SHADOW_SOFT },
   calHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
   calMonth: { fontSize: 14.5, fontWeight: "800", color: C.ink, letterSpacing: -0.3 },
   calNav: { flexDirection: "row", gap: 8 },
@@ -2087,14 +2500,18 @@ const styles = StyleSheet.create({
   calDow: { fontSize: 10.5, fontWeight: "700", color: C.muted, marginBottom: 7 },
   calDowOn: { color: C.ink },
   calPill: { width: 34, height: 40, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: C.lineSoft },
-  calPillOn: { backgroundColor: C.dark },
+  calPillOn: { backgroundColor: C.dark, ...SHADOW_SOFT },
+  // Today, when it is not the selected day, gets a ring rather than a fill — so
+  // "where I am" and "what I am looking at" stay distinguishable.
+  calPillToday: { backgroundColor: C.mintLift, borderWidth: 1.5, borderColor: C.mint },
   calDate: { fontSize: 14, fontWeight: "700", color: C.ink },
   calDateOn: { color: C.card },
   calMark: { width: 5, height: 5, borderRadius: 3, marginTop: 7, backgroundColor: "transparent" },
   calMarkOn: { backgroundColor: C.green },
   calMarkToday: { backgroundColor: C.line },
 
-  actionCard: { flex: 1, backgroundColor: C.card, borderRadius: 20, padding: 15, ...SHADOW_SOFT },
+  fill: { flex: 1, zIndex: 1 },
+  actionCard: { flex: 1, backgroundColor: C.card, borderRadius: 20, padding: 15, overflow: "hidden", ...SHADOW_SOFT, zIndex: 1 },
   actionIcon: { width: 36, height: 36, borderRadius: 13, alignItems: "center", justifyContent: "center", marginBottom: 11 },
   actionTitle: { fontSize: 13.5, fontWeight: "800", color: C.ink, letterSpacing: -0.2 },
   actionSub: { fontSize: 11, color: C.muted, fontWeight: "600", marginTop: 2 },
@@ -2104,7 +2521,10 @@ const styles = StyleSheet.create({
   sectionSub: { fontSize: 11.5, color: C.muted, fontWeight: "600", marginTop: 3 },
   sectionLink: { fontSize: 12.5, fontWeight: "700", color: C.greenDeep },
 
-  mealRow: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: C.card, borderRadius: 20, padding: 12, marginBottom: 10, ...SHADOW_SOFT },
+  // The row itself only draws the surface; the layout lives in mealRowInner
+  // because PressCard's Pressable sits between the two and takes flex: 1.
+  mealRow: { backgroundColor: C.card, borderRadius: 20, marginBottom: 10, overflow: "hidden", ...SHADOW_SOFT },
+  mealRowInner: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12 },
   mealThumb: { width: 52, height: 52, borderRadius: 16, backgroundColor: C.lineSoft },
   mealThumbEmpty: { alignItems: "center", justifyContent: "center" },
   mealName: { fontSize: 14, fontWeight: "800", color: C.ink, letterSpacing: -0.2 },
@@ -2114,7 +2534,10 @@ const styles = StyleSheet.create({
   mealKcalUnit: { fontSize: 9.5, fontWeight: "700", color: C.muted },
   mealFlag: { position: "absolute", top: 12, left: 12, width: 9, height: 9, borderRadius: 5, backgroundColor: C.amber, borderWidth: 2, borderColor: C.card },
 
-  empty: { backgroundColor: C.card, borderRadius: 22, padding: 24, alignItems: "center", ...SHADOW_SOFT },
+  empty: { backgroundColor: C.card, borderRadius: 24, padding: 24, alignItems: "center", overflow: "hidden", ...SHADOW_SOFT },
+  // An oversized, very faint mint disc bled off the top edge. An empty card is
+  // the one surface with nothing in it to look at, so it gets the light instead.
+  emptyGlow: { position: "absolute", top: -110, alignSelf: "center", width: 240, height: 240, borderRadius: 120, backgroundColor: C.mintSoft, opacity: 0.75 },
   emptyIcon: { width: 52, height: 52, borderRadius: 18, backgroundColor: C.mintSoft, alignItems: "center", justifyContent: "center" },
   emptyTitle: { fontSize: 15.5, fontWeight: "800", color: C.ink, marginTop: 14, letterSpacing: -0.3 },
   emptyBody: { fontSize: 12.5, lineHeight: 19, color: C.ink2, textAlign: "center", marginTop: 6, maxWidth: 260 },
@@ -2130,7 +2553,7 @@ const styles = StyleSheet.create({
   rangeText: { fontSize: 12, fontWeight: "700", color: C.muted },
   rangeTextOn: { color: C.ink },
 
-  chartCard: { backgroundColor: C.card, borderRadius: 24, padding: 18, ...SHADOW },
+  chartCard: { backgroundColor: C.card, borderRadius: 24, padding: 18, overflow: "hidden", ...SHADOW },
   chartHead: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
   chartLabel: { fontSize: 12.5, fontWeight: "700", color: C.muted },
   chartBig: { fontSize: 34, fontWeight: "800", color: C.ink, letterSpacing: -1.3, lineHeight: 38 },
@@ -2147,6 +2570,9 @@ const styles = StyleSheet.create({
   chartPctOn: { color: C.ink },
   chartTrack: { backgroundColor: C.lineSoft, overflow: "hidden", justifyContent: "flex-end" },
   chartFill: { width: "100%" },
+  // A white bloom on the bar's top third — makes each bar look like a lit column
+  // rather than a flat block, and costs nothing per tint.
+  chartCap: { position: "absolute", top: 0, left: 0, right: 0, height: "38%", backgroundColor: "rgba(255,255,255,0.26)" },
   chartDow: { fontSize: 10.5, fontWeight: "700", color: C.muted, marginTop: 9 },
   chartDowOn: { color: C.ink },
   hatch: { ...StyleSheet.absoluteFillObject, overflow: "hidden" },
@@ -2160,16 +2586,17 @@ const styles = StyleSheet.create({
   legendAvg: { flex: 1, textAlign: "right", fontSize: 11, fontWeight: "700", color: C.ink2 },
 
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 14 },
-  metricCard: { width: "47.6%", flexGrow: 1, backgroundColor: C.card, borderRadius: 20, padding: 15, ...SHADOW_SOFT },
+  metricCard: { width: "47.6%", flexGrow: 1, backgroundColor: C.card, borderRadius: 20, padding: 15, overflow: "hidden", ...SHADOW_SOFT },
   metricHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 11 },
   metricIcon: { width: 26, height: 26, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   metricLabel: { fontSize: 12, fontWeight: "700", color: C.ink2 },
   metricValue: { fontSize: 22, fontWeight: "800", color: C.ink, letterSpacing: -0.8, lineHeight: 26 },
   metricUnit: { fontSize: 10.5, fontWeight: "700", color: C.muted, paddingBottom: 4 },
   metricTrack: { height: 6, borderRadius: 3, backgroundColor: C.lineSoft, marginTop: 10, overflow: "hidden" },
-  metricFill: { height: 6, borderRadius: 3 },
+  metricFill: { height: 6, borderRadius: 3, overflow: "hidden" },
+  metricGloss: { position: "absolute", top: 0, left: 0, right: 0, height: 3, backgroundColor: "rgba(255,255,255,0.34)" },
 
-  infoCard: { backgroundColor: C.card, borderRadius: 22, paddingHorizontal: 16, marginTop: 14, ...SHADOW_SOFT },
+  infoCard: { backgroundColor: C.card, borderRadius: 22, paddingHorizontal: 16, marginTop: 14, overflow: "hidden", ...SHADOW_SOFT },
   infoRow: { flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 15 },
   infoLabel: { flex: 1, fontSize: 13.5, fontWeight: "700", color: C.ink },
   infoValue: { fontSize: 13, fontWeight: "800", color: C.ink2 },
@@ -2187,12 +2614,12 @@ const styles = StyleSheet.create({
   photoFrame: { width: "100%", borderRadius: 24, overflow: "hidden", backgroundColor: C.lineSoft, ...SHADOW },
   photo: { width: "100%", height: "100%" },
 
-  totalsCard: { backgroundColor: C.mint, borderRadius: 24, padding: 18, marginTop: 14, ...SHADOW },
+  totalsCard: { backgroundColor: C.mint, borderRadius: 24, padding: 18, marginTop: 14, overflow: "hidden", ...SHADOW_GLOW },
   totalsLabel: { fontSize: 12.5, fontWeight: "700", color: C.greenDeep },
   totalsValue: { fontSize: 38, fontWeight: "800", color: C.onGreen, letterSpacing: -1.5, lineHeight: 42 },
   totalsUnit: { fontSize: 13, fontWeight: "700", color: C.greenDeep, paddingBottom: 6 },
   macroPillRow: { flexDirection: "row", gap: 8, marginTop: 16 },
-  macroPill: { flex: 1, backgroundColor: "rgba(255,255,255,0.78)", borderRadius: 15, paddingVertical: 11, alignItems: "center" },
+  macroPill: { flex: 1, backgroundColor: C.glass, borderRadius: 15, paddingVertical: 11, alignItems: "center", borderWidth: 1, borderColor: C.glassLine },
   macroPillDot: { width: 7, height: 7, borderRadius: 4, marginBottom: 6 },
   macroPillValue: { fontSize: 14, fontWeight: "800", color: C.ink, letterSpacing: -0.3 },
   macroPillLabel: { fontSize: 10, fontWeight: "700", color: C.ink2, marginTop: 2 },
@@ -2200,7 +2627,8 @@ const styles = StyleSheet.create({
   warn: { flexDirection: "row", alignItems: "flex-start", gap: 9, backgroundColor: C.card, borderRadius: 16, padding: 13, marginTop: 12, ...SHADOW_SOFT },
   warnText: { flex: 1, fontSize: 12, lineHeight: 18, color: C.ink2, fontWeight: "600" },
 
-  itemCard: { flexDirection: "row", alignItems: "flex-start", gap: 11, backgroundColor: C.card, borderRadius: 20, padding: 13, marginBottom: 10, ...SHADOW_SOFT },
+  itemCard: { backgroundColor: C.card, borderRadius: 20, marginBottom: 10, overflow: "hidden", ...SHADOW_SOFT },
+  itemCardInner: { flexDirection: "row", alignItems: "flex-start", gap: 11, padding: 13 },
   itemLow: { borderWidth: 1, borderColor: "rgba(240,163,43,0.45)" },
   itemIndex: { width: 26, height: 26, borderRadius: 9, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", marginTop: 1 },
   itemIndexLow: { backgroundColor: "rgba(240,163,43,0.22)" },
@@ -2222,18 +2650,19 @@ const styles = StyleSheet.create({
   itemKcal: { fontSize: 15.5, fontWeight: "800", color: C.ink, letterSpacing: -0.4 },
   itemUnit: { fontSize: 9.5, fontWeight: "700", color: C.muted },
 
-  microCard: { backgroundColor: C.card, borderRadius: 22, padding: 17, marginTop: 14, ...SHADOW_SOFT },
+  microCard: { backgroundColor: C.card, borderRadius: 22, padding: 17, marginTop: 14, overflow: "hidden", ...SHADOW_SOFT },
   microRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 13 },
   microLabel: { width: 92, fontSize: 11.5, fontWeight: "700", color: C.ink2 },
   microTrack: { flex: 1, height: 7, borderRadius: 4, backgroundColor: C.lineSoft, overflow: "hidden" },
-  microFill: { height: 7, borderRadius: 4, backgroundColor: C.green },
+  microFill: { height: 7, borderRadius: 4, backgroundColor: C.green, overflow: "hidden" },
   microValue: { width: 40, textAlign: "right", fontSize: 11.5, fontWeight: "800", color: C.ink },
 
   engineRow: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 18, paddingHorizontal: 4 },
   engineText: { flex: 1, fontSize: 10.5, color: C.muted, fontWeight: "600" },
 
-  profileCard: { backgroundColor: C.card, borderRadius: 24, padding: 22, alignItems: "center", ...SHADOW },
-  profileAvatar: { width: 66, height: 66, borderRadius: 23, backgroundColor: C.mint, alignItems: "center", justifyContent: "center" },
+  profileCard: { backgroundColor: C.card, borderRadius: 24, padding: 22, alignItems: "center", overflow: "hidden", ...SHADOW },
+  profileGlow: { position: "absolute", top: -96, alignSelf: "center", width: 220, height: 220, borderRadius: 110, backgroundColor: C.mintSoft, opacity: 0.8 },
+  profileAvatar: { width: 66, height: 66, borderRadius: 23, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
   profileAvatarText: { fontSize: 26, fontWeight: "800", color: C.onGreen },
   profileName: { fontSize: 19, fontWeight: "800", color: C.ink, marginTop: 13, letterSpacing: -0.5 },
   profileMeta: { fontSize: 12, fontWeight: "600", color: C.muted, marginTop: 4 },
@@ -2242,11 +2671,11 @@ const styles = StyleSheet.create({
 
   goalRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   goalChip: { backgroundColor: C.card, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: C.line },
-  goalChipOn: { backgroundColor: C.green, borderColor: C.green },
+  goalChipOn: { backgroundColor: C.green, borderColor: C.green, ...SHADOW_GLOW },
   goalChipText: { fontSize: 13, fontWeight: "700", color: C.ink2 },
   goalChipTextOn: { color: C.onGreen, fontWeight: "800" },
 
-  settingsCard: { backgroundColor: C.card, borderRadius: 22, paddingHorizontal: 16, ...SHADOW_SOFT },
+  settingsCard: { backgroundColor: C.card, borderRadius: 22, paddingHorizontal: 16, overflow: "hidden", ...SHADOW_SOFT },
   settingRow: { flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 15 },
   settingIcon: { width: 30, height: 30, borderRadius: 11, backgroundColor: C.mintSoft, alignItems: "center", justifyContent: "center" },
   settingLabel: { flex: 1, fontSize: 13.5, fontWeight: "700", color: C.ink },
@@ -2258,29 +2687,96 @@ const styles = StyleSheet.create({
   camRound: { width: 42, height: 42, borderRadius: 15, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
   camHint: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(0,0,0,0.45)", borderRadius: 14, paddingVertical: 8, paddingHorizontal: 12 },
   camHintText: { fontSize: 11.5, fontWeight: "700", color: C.card },
-  camGuide: { position: "absolute", top: "24%", left: "12%", right: "12%", aspectRatio: 1, borderRadius: 28, borderWidth: 2, borderColor: "rgba(216,241,135,0.7)" },
+  camGuide: { position: "absolute", top: "24%", left: "12%", right: "12%", aspectRatio: 1, borderRadius: 28, borderWidth: 1.5, borderColor: "rgba(216,241,135,0.32)" },
+  camGuideCorner: { position: "absolute", width: 34, height: 34, borderColor: C.mint, borderWidth: 3 },
   camBottom: { position: "absolute", bottom: 44 + BOTTOM_INSET, left: 18, right: 18, alignItems: "center", gap: 14 },
   camTip: { fontSize: 11.5, color: "rgba(255,255,255,0.78)", fontWeight: "600", textAlign: "center" },
+  camPermError: { position: "absolute", bottom: 160, left: 30, right: 30, alignItems: "center", backgroundColor: "rgba(0,0,0,0.7)", borderRadius: 16, padding: 20 },
+  camPermErrorText: { color: "#fff", fontSize: 13, fontWeight: "600", textAlign: "center", marginTop: 8 },
+  camPermRetry: { marginTop: 12, backgroundColor: C.mint, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 20 },
+  camPermRetryText: { fontSize: 13, fontWeight: "800", color: C.onGreen },
   shutter: { width: 82, height: 82, borderRadius: 41, borderWidth: 3, borderColor: "rgba(255,255,255,0.5)", alignItems: "center", justifyContent: "center" },
-  shutterInner: { width: 66, height: 66, borderRadius: 33, backgroundColor: C.mint, alignItems: "center", justifyContent: "center" },
+  shutterInner: { width: 66, height: 66, borderRadius: 33, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
 
-  sheetBackdrop: { flex: 1, backgroundColor: "rgba(20,22,18,0.42)", justifyContent: "flex-end" },
-  sheet: { backgroundColor: C.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, paddingBottom: 34 + BOTTOM_INSET },
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(12,26,18,0.5)", justifyContent: "flex-end" },
+  sheet: { backgroundColor: C.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22, paddingBottom: 34 + BOTTOM_INSET, overflow: "hidden" },
   sheetGrip: { alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: C.line, marginBottom: 18 },
   sheetTitle: { fontSize: 20, fontWeight: "800", color: C.ink, letterSpacing: -0.5 },
   sheetBody: { fontSize: 12.5, lineHeight: 19, color: C.ink2, marginTop: 6 },
   altRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 14 },
   altChip: { backgroundColor: C.card, borderRadius: 13, paddingVertical: 9, paddingHorizontal: 13, borderWidth: 1, borderColor: C.line },
-  altChipOn: { backgroundColor: C.green, borderColor: C.green },
+  altChipOn: { backgroundColor: C.green, borderColor: C.green, ...SHADOW_GLOW },
   altChipText: { fontSize: 12.5, fontWeight: "700", color: C.ink2 },
   altChipTextOn: { color: C.onGreen, fontWeight: "800" },
   sheetActions: { flexDirection: "row", gap: 12, marginTop: 6 },
   sheetBtn: { flex: 1, marginTop: 22 },
 
-  tabBar: { position: "absolute", bottom: 18 + BOTTOM_INSET, left: 18, right: 18, height: 72, borderRadius: 26, backgroundColor: C.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, ...SHADOW },
+  tabBar: { position: "absolute", bottom: 18 + BOTTOM_INSET, left: 18, right: 18, height: 72, borderRadius: 26, backgroundColor: C.card, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, overflow: "hidden", ...SHADOW },
   tabBtn: { flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
   tabLabel: { fontSize: 9.5, fontWeight: "700", color: C.muted },
   tabLabelOn: { color: C.ink },
-  tabDot: { position: "absolute", top: 5, width: 16, height: 3, borderRadius: 2, backgroundColor: C.green },
-  scanBtn: { width: 62, height: 62, borderRadius: 22, backgroundColor: C.green, alignItems: "center", justifyContent: "center", marginHorizontal: 6, ...SHADOW },
+  tabDot: { position: "absolute", top: 4, width: 18, height: 3, borderRadius: 2, backgroundColor: C.green },
+  scanWrap: { marginHorizontal: 6, alignItems: "center", justifyContent: "center" },
+  // A soft mint bloom under the primary action, wider than the button so it
+  // reads as light spilling out rather than a second, larger button.
+  scanHalo: { position: "absolute", width: 70, height: 70, borderRadius: 35, backgroundColor: C.mintSoft, opacity: 0.9 },
+  scanBtn: { width: 62, height: 62, borderRadius: 22, backgroundColor: C.green, alignItems: "center", justifyContent: "center", ...SHADOW_GLOW },
+
+  analyzingWrap: { flex: 1, backgroundColor: C.bg },
+  analyzingContent: { flex: 1, paddingHorizontal: 22, paddingTop: TOP_INSET + 12, paddingBottom: 30 + BOTTOM_INSET },
+  analyzingHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
+  analyzingHeaderText: { fontSize: 17, fontWeight: "800", color: C.ink, letterSpacing: -0.4 },
+  analyzingImageWrap: { width: "100%", height: 180, borderRadius: 20, overflow: "hidden", backgroundColor: C.lineSoft, marginBottom: 16, ...SHADOW },
+  analyzingImage: { width: "100%", height: "100%" },
+  analyzingImageWrapSmall: { width: 80, height: 80, borderRadius: 20, overflow: "hidden", backgroundColor: C.lineSoft, alignSelf: "center", marginBottom: 24, ...SHADOW },
+  analyzingImageSmall: { width: "100%", height: "100%" },
+  analyzingSubhead: { fontSize: 13, fontWeight: "600", color: C.ink2, marginBottom: 16, textAlign: "center" },
+  analyzingHint: { fontSize: 12.5, fontWeight: "600", color: C.muted, textAlign: "center", marginTop: 16 },
+  analyzingTitle: { fontSize: 22, fontWeight: "800", color: C.ink, letterSpacing: -0.5, marginTop: 16 },
+  analyzingError: { fontSize: 13.5, color: C.ink2, textAlign: "center", marginTop: 8, lineHeight: 20 },
+  analyzingErrorIcon: { width: 72, height: 72, borderRadius: 26, backgroundColor: "rgba(217,83,74,0.10)", alignItems: "center", justifyContent: "center" },
+
+  stageOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(240,240,238,0.92)", zIndex: 999, alignItems: "center", justifyContent: "center" },
+  stageCard: { backgroundColor: C.card, borderRadius: 28, paddingVertical: 32, paddingHorizontal: 28, alignItems: "center", width: 270, ...SHADOW },
+  stageIconWrap: { width: 68, height: 68, borderRadius: 24, backgroundColor: C.mintSoft, alignItems: "center", justifyContent: "center", marginBottom: 18 },
+  stageTitle: { fontSize: 18, fontWeight: "800", color: C.ink, letterSpacing: -0.4, marginBottom: 6, textAlign: "center" },
+  stageStep: { fontSize: 13, fontWeight: "600", color: C.ink2, marginBottom: 18, textAlign: "center" },
+  stageBar: { width: "100%", height: 5, borderRadius: 3, backgroundColor: C.lineSoft, overflow: "hidden" },
+  stageBarFill: { height: 5, borderRadius: 3, backgroundColor: C.green },
+  stageHint: { fontSize: 11, fontWeight: "500", color: C.muted, marginTop: 10, textAlign: "center", fontStyle: "italic" },
+
+  stageRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
+  stageDot: { width: 28, height: 28, borderRadius: 14, backgroundColor: C.lineSoft, alignItems: "center", justifyContent: "center" },
+  stageDotComplete: { backgroundColor: C.green },
+  stageDotActive: { backgroundColor: C.mint },
+  stageDotPending: { backgroundColor: C.lineSoft },
+  stageDotNum: { fontSize: 11, fontWeight: "800", color: C.muted },
+  stageLine: { width: 2, height: 20, backgroundColor: C.lineSoft, marginLeft: 13 },
+  stageLineComplete: { backgroundColor: C.green },
+  stageLinePending: { backgroundColor: C.lineSoft },
+  stageInfo: { flex: 1, marginLeft: 10, marginBottom: 12 },
+  stageLabel: { fontSize: 13, fontWeight: "600", color: C.muted },
+  stageLabelActive: { color: C.ink, fontWeight: "800" },
+  stageLabelComplete: { color: C.greenDeep },
+  stageProgressWrap: { marginTop: 6 },
+  stageProgressBar: { height: 4, borderRadius: 2, backgroundColor: C.lineSoft, overflow: "hidden" },
+  stageProgressFill: { height: 4, borderRadius: 2, backgroundColor: C.green },
+
+  stagesContainer: { backgroundColor: C.card, borderRadius: 22, padding: 18, marginTop: 8, ...SHADOW_SOFT },
+
+  editItemsScroll: { flex: 1, marginBottom: 16 },
+  editItemRow: { flexDirection: "row", alignItems: "center", backgroundColor: C.card, borderRadius: 16, padding: 12, marginBottom: 8, ...SHADOW_SOFT },
+  editItemLow: { borderWidth: 1, borderColor: "rgba(240,163,43,0.4)" },
+  editItemDot: { width: 26, height: 26, borderRadius: 9, backgroundColor: C.mint, alignItems: "center", justifyContent: "center", marginRight: 10 },
+  editItemDotLow: { backgroundColor: "rgba(240,163,43,0.2)" },
+  editItemDotText: { fontSize: 11, fontWeight: "800", color: C.onGreen },
+  editItemContent: { flex: 1 },
+  editItemLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  editItemName: { fontSize: 14, fontWeight: "700", color: C.ink, flex: 1 },
+  editItemLowTag: { backgroundColor: C.amber, borderRadius: 8, paddingVertical: 2, paddingHorizontal: 7 },
+  editItemLowText: { fontSize: 9.5, fontWeight: "800", color: C.onGreen },
+  editItemBtn: { width: 32, height: 32, borderRadius: 10, backgroundColor: C.mintSoft, alignItems: "center", justifyContent: "center", marginLeft: 8 },
+  editItemInputWrap: { flexDirection: "row", alignItems: "center", backgroundColor: C.lineSoft, borderRadius: 10, paddingHorizontal: 10 },
+  editItemInput: { flex: 1, fontSize: 14, fontWeight: "600", color: C.ink, paddingVertical: 8 },
+  editItemSave: { width: 28, height: 28, borderRadius: 9, backgroundColor: C.green, alignItems: "center", justifyContent: "center", marginLeft: 6 },
 });

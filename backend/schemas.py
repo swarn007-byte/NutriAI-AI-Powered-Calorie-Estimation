@@ -99,6 +99,7 @@ class ItemOut(BaseModel):
     fat_g: float
     nutrients: dict[str, Any]
     bbox: BoundingBox | None
+    outline: list[list[float]] = Field(default_factory=list)
     alternatives: list[dict[str, Any]]
     nutrition_source: str | None
     geometry: dict[str, Any] = Field(default_factory=dict)
@@ -136,6 +137,7 @@ class MealOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     timings_ms: dict[str, Any] = Field(default_factory=dict)
     notes: str | None = None
+    meal_type: str = "unknown"  # breakfast, lunch, dinner, snack
 
 
 class HistoryEntry(BaseModel):
@@ -244,6 +246,7 @@ class ScannedItemOut(BaseModel):
     low_confidence: bool
     unrecognized: bool
     bbox: BoundingBox | None
+    outline: list[list[float]] = Field(default_factory=list)
     alternatives: list[dict[str, Any]]
     area_cm2: float
     # Non-null only for countable foods. `piece_count` is a guess from area and

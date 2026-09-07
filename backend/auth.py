@@ -79,6 +79,11 @@ def create_guest_user(session: Session) -> User:
     )
     session.add(user)
     session.flush()
+    # Imported here rather than at module scope: `seed` reaches into nutrition and
+    # imaging, and `auth` is imported by every request path that needs a token.
+    from seed import seed_welcome_meal
+
+    seed_welcome_meal(session, user)
     return user
 
 

@@ -29,11 +29,15 @@ os.environ["DATABASE_URL"] = f"sqlite:///{Path(_TMP) / 'test.db'}"
 os.environ["UPLOAD_DIR"] = str(Path(_TMP) / "uploads")
 os.environ["ENABLE_TORCH_MODELS"] = "false"  # keep the suite fast and offline
 os.environ["JWT_SECRET"] = "test-secret"
+# Off by default so every other test can keep assuming a new account owns
+# nothing. TestWelcomeMeal re-enables it for the cases that are about the seed.
+os.environ["SEED_WELCOME_MEAL"] = "false"
 
 from PIL import Image  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
+import seed  # noqa: E402
 
 SAMPLES = BACKEND.parent / "frontend" / "samples"
 
@@ -1094,6 +1098,91 @@ class TestFrontendServing(ApiTestCase):
                 nested = self.client.get(urljoin(path, spec))
                 self.assertEqual(nested.status_code, 200, spec)
                 self.assertIn("css", nested.headers["content-type"], spec)
+
+
+class TestWelcomeMeal(ApiTestCase):
+    """The sample meal a brand-new account is given (backend/seed.py).
+
+    The rest of the suite runs with seeding off, so these cases flip the setting
+    on around themselves rather than relying on the process default.
+    """
+
+    def setUp(self):
+        self._previous = main.settings.seed_welcome_meal
+        main.settings.seed_welcome_meal = True
+
+    def tearDown(self):
+        main.settings.seed_welcome_meal = self._previous
+
+    def test_a_new_guest_starts_with_one_meal_in_history(self):
+        _, headers = self.guest()
+        body = self.client.get("/api/users/me/history", headers=headers).json()
+        self.assertEqual(body["total"], 1)
+        entry = body["meals"][0]
+        self.assertTrue(entry["thumb_url"])
+        self.assertEqual(entry["item_count"], len(seed.WELCOME_ITEMS))
+        self.assertTrue(entry["top_items"])
+        self.assertFalse(entry["has_low_confidence"])
+
+    def test_the_seeded_thumbnail_is_actually_served(self):
+        _, headers = self.guest()
+        entry = self.client.get("/api/users/me/history", headers=headers).json()["meals"][0]
+        response = self.client.get(entry["thumb_url"])
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image", response.headers["content-type"])
+
+    def test_seeded_totals_are_the_sum_of_its_items(self):
+        _, headers = self.guest()
+        meal_id = self.client.get("/api/users/me/history", headers=headers).json()["meals"][0]["meal_id"]
+        meal = self.client.get(f"/api/meals/{meal_id}", headers=headers).json()
+        self.assertAlmostEqual(
+            meal["totals"]["calories"],
+            sum(item["calories"] for item in meal["items"]),
+            delta=1.0,
+        )
+        for item in meal["items"]:
+            self.assertGreater(item["calories"], 0)
+            self.assertTrue(item["display_name"])
+
+    def test_the_seeded_meal_does_not_inflate_today(self):
+        """It is dated yesterday, so a new user's daily ring still reads zero."""
+        _, headers = self.guest()
+        body = self.client.get("/api/users/me/summary", headers=headers).json()
+        self.assertEqual(body["today"]["calories"], 0)
+
+    def test_registering_fresh_seeds_a_meal(self):
+        response = self.client.post(
+            "/api/auth/register",
+            json={"email": "seeded@example.com", "password": "hunter2hunter2", "name": "Seed"},
+        )
+        self.assertEqual(response.status_code, 200)
+        headers = {"Authorization": f"Bearer {response.json()['token']}"}
+        self.assertEqual(self.client.get("/api/users/me/history", headers=headers).json()["total"], 1)
+
+    def test_upgrading_a_guest_does_not_seed_a_second_meal(self):
+        _, headers = self.guest()
+        response = self.client.post(
+            "/api/auth/register",
+            json={"email": "upgraded@example.com", "password": "hunter2hunter2"},
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        upgraded = {"Authorization": f"Bearer {response.json()['token']}"}
+        self.assertEqual(self.client.get("/api/users/me/history", headers=upgraded).json()["total"], 1)
+
+    def test_seeding_can_be_switched_off(self):
+        main.settings.seed_welcome_meal = False
+        _, headers = self.guest()
+        self.assertEqual(self.client.get("/api/users/me/history", headers=headers).json()["total"], 0)
+
+    def test_a_missing_sample_image_does_not_block_account_creation(self):
+        original = seed.SAMPLE_IMAGE
+        seed.SAMPLE_IMAGE = original.with_name("does-not-exist.jpg")
+        try:
+            _, headers = self.guest()
+            self.assertEqual(self.client.get("/api/users/me/history", headers=headers).json()["total"], 0)
+        finally:
+            seed.SAMPLE_IMAGE = original
 
 
 if __name__ == "__main__":

@@ -534,6 +534,7 @@ class FoodDetector:
                 )
 
         regions = _merge_adjacent_similar(regions)
+        regions = _merge_small_with_nearby(regions)
         regions = _merge_overlaps(regions)
         regions.sort(key=lambda d: d.area_px, reverse=True)
         return regions[: settings.max_items_per_plate]
@@ -559,8 +560,8 @@ def _bbox_of(mask: np.ndarray) -> tuple[int, int, int, int]:
 def _merge_adjacent_similar(
     regions: list[Detection],
     *,
-    colour_tolerance: float = 13.0,
-    dilation: int = 5,
+    colour_tolerance: float = 18.0,
+    dilation: int = 7,
 ) -> list[Detection]:
     """Fuse touching regions of the same colour — one dish, not several.
 
@@ -570,6 +571,10 @@ def _merge_adjacent_similar(
     calories by the number of clusters, which is the single largest error the
     segmenter can make. So regions that *touch* and whose mean Lab colours are
     within `colour_tolerance` (roughly a just-noticeable ΔE) become one item.
+
+    Also merges small regions (< 15% of largest) that are within 2x bounding
+    box distance, even if colours differ slightly — a chunk of chicken in gravy
+    is one dish, not two.
     """
     if len(regions) < 2:
         return regions
@@ -613,6 +618,82 @@ def _merge_adjacent_similar(
             if merged_any:
                 break
     return working
+
+
+def _merge_small_with_nearby(
+    regions: list[Detection],
+    *,
+    small_fraction: float = 0.15,
+    max_distance_factor: float = 2.0,
+) -> list[Detection]:
+    """Merge small regions into nearby larger ones.
+
+    A chunk of chicken in a bowl of curry is one dish, not two. Small regions
+    (< 15% of the largest region's area) get absorbed by the nearest large
+    region if they're within 2x their combined bounding box size.
+    """
+    if len(regions) < 2:
+        return regions
+
+    regions = sorted(regions, key=lambda d: d.area_px, reverse=True)
+    largest_area = regions[0].area_px
+
+    merged = []
+    absorbed = set()
+
+    for i, small in enumerate(regions):
+        if i in absorbed:
+            continue
+        if small.area_px > small_fraction * largest_area:
+            merged.append(small)
+            continue
+
+        # Find nearest large region
+        best_target = None
+        best_dist = float("inf")
+        sx, sy, sw, sh = small.bbox
+        scx, scy = sx + sw / 2, sy + sh / 2
+
+        for j, large in enumerate(regions):
+            if j <= i or j in absorbed:
+                continue
+            if large.area_px <= small.area_px:
+                continue
+            lx, ly, lw, lh = large.bbox
+            lcx, lcy = lx + lw / 2, ly + lh / 2
+            dist = ((scx - lcx) ** 2 + (scy - lcy) ** 2) ** 0.5
+            max_dist = max_distance_factor * (max(sw, sh) + max(lw, lh))
+            if dist < max_dist and dist < best_dist:
+                best_dist = dist
+                best_target = j
+
+        if best_target is not None:
+            target = regions[best_target]
+            # Merge into target
+            if small.mask is not None and target.mask is not None:
+                union = target.mask | small.mask
+                target.mask = union
+                target.area_px = int(union.sum())
+                target.bbox = _bbox_of(union)
+                lab_a = np.asarray(target.meta.get("mean_lab", [0, 0, 0]), dtype=np.float64)
+                lab_b = np.asarray(small.meta.get("mean_lab", [0, 0, 0]), dtype=np.float64)
+                total = float(target.area_px + small.area_px) or 1.0
+                blended = (lab_a * target.area_px + lab_b * small.area_px) / total
+                target.meta["mean_lab"] = [round(float(v), 2) for v in blended]
+                target.meta["merged"] = int(target.meta.get("merged", 1)) + 1
+            else:
+                target.area_px += small.area_px
+                target.bbox = (
+                    min(target.bbox[0], small.bbox[0]),
+                    min(target.bbox[1], small.bbox[1]),
+                    max(target.bbox[0] + target.bbox[2], small.bbox[0] + small.bbox[2]) - min(target.bbox[0], small.bbox[0]),
+                    max(target.bbox[1] + target.bbox[3], small.bbox[1] + small.bbox[3]) - min(target.bbox[1], small.bbox[1]),
+                )
+            absorbed.add(i)
+        else:
+            merged.append(small)
+
+    return merged
 
 
 def _merge_overlaps(regions: list[Detection], threshold: float = 0.55) -> list[Detection]:

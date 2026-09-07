@@ -103,6 +103,23 @@ class Settings:
     )
     enable_torch_models = _env_bool("ENABLE_TORCH_MODELS", True)
 
+    # --- PortionNet (opt-in) ------------------------------------------------
+    # Set CLASSIFIER_ENGINE=portionnet to use PortionNet instead of EfficientNet.
+    # Requires torch + the PortionNet repo cloned into backend/tools/portionnet.
+    classifier_engine = os.getenv("CLASSIFIER_ENGINE") or "efficientnet"
+    portionnet_checkpoint = os.getenv("PORTIONNET_CHECKPOINT") or str(
+        MODEL_DIR / "portionnet_seed7.pt"
+    )
+
+    # --- CalorieCLIP (opt-in calorie estimator) ----------------------------
+    # Set ENABLE_CALORIECLIP=true to use CalorieCLIP for direct calorie
+    # prediction. Replaces the depth → volume → weight → nutrition chain
+    # with a single CLIP forward pass. Trained on Nutrition5k + Food-101.
+    enable_calorieclip = _env_bool("ENABLE_CALORIECLIP", True)
+    calorieclip_checkpoint = os.getenv("CALORIECLIP_CHECKPOINT") or str(
+        MODEL_DIR / "calorie_clip.pt"
+    )
+
     # --- Stage 4 over HTTP ----------------------------------------------
     # The trained classifier is the one stage worth hosting separately: it is the
     # only component that needs torch, and keeping it out of this process means
@@ -125,6 +142,9 @@ class Settings:
         if o.strip()
     ]
     serve_frontend = _env_bool("SERVE_FRONTEND", True)
+    # Give a brand-new account one pre-analysed sample meal so the history, day
+    # strip and statistics screens have something to render on first launch.
+    seed_welcome_meal = _env_bool("SEED_WELCOME_MEAL", True)
 
     @property
     def is_sqlite(self) -> bool:
