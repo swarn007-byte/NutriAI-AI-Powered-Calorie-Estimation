@@ -138,8 +138,23 @@ Nutri-AI is a **single FastAPI process**. Not microservices. One person maintain
 │                                                                  │
 │  imaging.py → detection.py → depth.py → classify.py →nutrition.py│
 │   stage 1       stage 2       stage 3     stage 4      stage 5   │
+│                  YOLOv8        MiDaS     CLIP+ENet    IFCT+USDA  │
+│                  U-Net*                      CalorieCLIP*        │
 └─────────────────────────────────────────────────────────────────┘
+  * optional, enabled by default
 ```
+
+### The models — what does what
+
+| Model | Task | Architecture | Default |
+|---|---|---|---|
+| YOLOv8-nano | Detect food regions on plate | YOLOv8 nano | ON |
+| MiDaS v3 Small | Depth map → volume → weight | DPT-based | ON |
+| CLIP ViT-B/32 | Zero-shot food classification | OpenAI CLIP | ON |
+| EfficientNet-B3 | Trained food classification (42 classes) | EfficientNet-B3 | ON |
+| CalorieCLIP | Direct calorie prediction from image | CLIP ViT-B/32 + RegressionHead MLP | ON |
+| Residual U-Net | Food region segmentation (visual overlay) | Residual U-Net + SE attention | ON |
+| Indian Food Classifier | 24 Indian dishes with calorie lookup | EfficientNet-B3 | ON |
 
 ### The two-phase flow — the most important design decision
 
@@ -225,11 +240,13 @@ Turns a region into millilitres, then grams. Fully explained in [§5](#5-how-a-p
 
 The one custom-trained component. Takes a crop, returns a `Prediction` (label, confidence, alternatives).
 
-Three engines, most capable first, **as strict alternatives — never blended**:
+Classification uses an **ensemble of CLIP ViT-B/32 and EfficientNet-B3**, with fallbacks:
 
 1. **`RemoteClassifier`** — a hosted `model_api/` deployment at `CLASSIFIER_URL`. All crops from one plate go in a single batched request, pre-resized to 300×300 (~20 KB each instead of ~500 KB). Three consecutive failures open a 120-second circuit breaker, so a dead host costs one timeout per photo, not six.
-2. **`DishClassifier`** — a local checkpoint, when this deploy has torch. One stacked forward pass per plate.
-3. **`SignatureClassifier`** — always available. A hand-built colour/texture prior over all 42 classes, using Lab anchors. Caps its own confidence at `CONFIDENCE_CAP = 0.88` because a heuristic should never claim near-certainty.
+2. **Ensemble: CLIP + EfficientNet-B3** — when both are available, predictions are blended: CLIP at 0.6 weight, EfficientNet at 0.4. Agreement boosts confidence by +0.1; disagreement uses the higher-confidence prediction. CLIP uses detailed visual prompts (e.g., "cubes of white paneer cheese in rich creamy orange-red gravy") rather than bare dish names, with temperature scaling at 50 for per-crop classification.
+3. **`CLIPClassifier` alone** — if only CLIP is available (no EfficientNet checkpoint).
+4. **`DishClassifier` alone** — if only EfficientNet is available (no CLIP).
+5. **`SignatureClassifier`** — always available as a last resort. A hand-built colour/texture prior over all 42 classes, using Lab anchors. Caps its own confidence at `CONFIDENCE_CAP = 0.88` because a heuristic should never claim near-certainty.
 
 This file also contains the entire **training** implementation — `train()`, augmentation, mixup/cutmix, EMA, layer-decay parameter groups, warm-starting, stratified splitting and the training-log appender. Inference and training live together because they must agree on preprocessing exactly.
 
@@ -250,6 +267,17 @@ Label + grams → calories, macros and 13 micronutrients.
 **The bundled tables come first, deliberately.** They are offline, they cover all 42 labels, and for Indian dishes they are simply the better source. USDA is the extension for labels the tables don't carry.
 
 > ⚠️ **The dangerous property of this chain: it never errors.** An unrecognised label produces *plausible generic numbers*, not a failure. The UI looks perfectly correct and the calories are fiction. This is why the 42 label names are treated as a join key and never renamed — see [§8](#8-the-42-dishes).
+
+### CalorieCLIP — direct calorie prediction
+
+CalorieCLIP (`calorieclip.py`) bypasses the depth → volume → weight → nutrition lookup chain entirely. It predicts calories directly from the food image using CLIP ViT-B/32 as a frozen feature extractor, feeding 512-d image features into a custom RegressionHead MLP.
+
+**Blending logic:** When both CalorieCLIP and the nutrition table produce calorie estimates, they are blended:
+- Known piece-weighted foods (samosa, idli, etc.) → trust the table, ignore CalorieCLIP
+- Ratio > 2x or < 0.5x → reject CalorieCLIP prediction
+- Within reasonable range → **70% table + 30% CalorieCLIP** blend
+
+Performance: MAE 51.4 calories, 67.6% within ±50 cal, 90.5% within ±100 cal (trained on Nutrition5k + Food-101, 13K images).
 
 ---
 
@@ -575,6 +603,22 @@ When adopting any third-party checkpoint, route its labels through `train_kaggle
 
 ## 9. Model status — the honest numbers
 
+### CalorieCLIP — primary calorie predictor
+
+CalorieCLIP is the main calorie prediction model. It uses CLIP ViT-B/32 as a frozen image encoder and a custom RegressionHead MLP to predict calories directly from food images, bypassing the depth → volume → weight chain.
+
+| | |
+|---|---|
+| Architecture | CLIP ViT-B/32 (frozen) + RegressionHead (512→512→256→64→1) |
+| Checkpoint | `models/calorie_clip.pt` |
+| Training data | Nutrition5k + Food-101 (13K images) |
+| **MAE** | **51.4 calories** |
+| **Within ±50 cal** | **67.6%** |
+| **Within ±100 cal** | **90.5%** |
+| Default | ON (`ENABLE_CALORIECLIP=true`) |
+
+CalorieCLIP blends with the nutrition table: 70% table + 30% CalorieCLIP, except for known piece-weighted foods (samosa, idli) where only the table is used.
+
 ### The production checkpoint: `efficientnet_v1.pt`
 
 | | |
@@ -673,9 +717,15 @@ Everything is optional. `cp .env.example backend/.env` and uncomment what you ne
 | Env var | Default | Controls |
 |---|---|---|
 | `ENABLE_TORCH_MODELS` | `true` | Set `false` to skip torch entirely for a faster boot. |
+| `ENABLE_CALORIECLIP` | `true` | Direct calorie prediction via CLIP + RegressionHead. |
+| `ENABLE_SEGMENTATION` | `true` | Food region segmentation via Residual U-Net (visual overlay). |
+| `ENABLE_INDIAN_CLASSIFICATION` | `true` | 24-class Indian food classifier with built-in calorie lookup. |
 | `YOLO_WEIGHTS` | `yolov8n.pt` | Detection weights. |
 | `MIDAS_MODEL` | `MiDaS_small` | Depth model variant. |
 | `CLASSIFIER_CHECKPOINT` | `MODEL_DIR/efficientnet_v1.pt` | Local stage-4 checkpoint. |
+| `CALORIECLIP_CHECKPOINT` | `MODEL_DIR/calorie_clip.pt` | CalorieCLIP regression head + CLIP weights. |
+| `SEGMENTATION_CHECKPOINT` | `MODEL_DIR/best_olk_residual_unet.pt` | Residual U-Net segmentation model. |
+| `CLASSIFIER_ENGINE` | `efficientnet` | Set to `portionnet` for the dual RGB + PointCloud classifier. |
 
 ### Hosted classifier
 
@@ -708,6 +758,7 @@ All application routes are namespaced under `/api` (`design.md` §22.9). Full in
 | `POST` | `/api/auth/login` | no | Email + password |
 | `GET` | `/api/auth/me` | yes | Current user |
 | `PATCH` | `/api/users/me/preferences` | yes | Calorie goal, default plate diameter |
+| `POST` | `/api/users/me/photo` | yes | Upload profile photo |
 | `POST` | `/api/meals/scan` | yes | **Phase 1.** `multipart/form-data`, field `image`. Names items, costs nothing |
 | `POST` | `/api/meals/{draft_id}/analyze` | yes | **Phase 2.** Reviewed list + plate diameter → finished meal |
 | `POST` | `/api/meals/analyze` | yes | Both phases in one call |
@@ -787,7 +838,7 @@ Stale drafts are swept by `main._sweep_stale_drafts()`.
 
 ## 13. The mobile app
 
-React Native via Expo. The whole app is `mobile/App.js` — 2,286 lines, one file, no navigation library.
+React Native via Expo. The whole app is `mobile/App.js` — 3,179 lines, one file, no navigation library.
 
 ```bash
 cd mobile
